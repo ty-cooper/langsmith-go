@@ -9,10 +9,10 @@ This package provides a Go client for [LangSmith](https://smith.langchain.com/) 
 ## Installation
 
 ```bash
-go get github.com/ty-cooper/langsmith-go@v0.1.0
+go get github.com/ty-cooper/langsmith-go
 ```
 
-**Requirements:** Go 1.22+ | **Latest:** `v0.1.0`
+**Requirements:** Go 1.22+
 
 ## Quick Start
 
