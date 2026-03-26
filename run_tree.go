@@ -267,9 +267,11 @@ func (rt *RunTree) PatchRun() {
 	}
 	update := rt.buildUpdateLocked()
 	id := rt.ID
+	traceID := rt.TraceID
+	dottedOrder := rt.DottedOrder
 	rt.mu.Unlock()
 
-	rt.client.UpdateRunBatched(id, update)
+	rt.client.UpdateRunBatched(id, traceID, dottedOrder, update)
 }
 
 // Children returns a copy of the child run trees.

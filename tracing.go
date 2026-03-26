@@ -131,6 +131,20 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 	return rc.ResponseWriter.Write(b)
 }
 
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter
+// if it supports flushing. This is required for streaming responses and SSE.
+func (rc *responseCapture) Flush() {
+	if f, ok := rc.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap returns the underlying ResponseWriter so middleware stacking works
+// correctly with Go 1.20+ response controller.
+func (rc *responseCapture) Unwrap() http.ResponseWriter {
+	return rc.ResponseWriter
+}
+
 // TracingMiddleware returns an HTTP middleware that creates a root RunTree
 // for each incoming request and attaches it to the request context.
 // It captures the response status code in the run outputs.
