@@ -30,7 +30,7 @@ func (c *Client) CreateRunBatched(run RunCreate) bool {
 
 // UpdateRun updates an existing run.
 func (c *Client) UpdateRun(ctx context.Context, runID string, update RunUpdate) error {
-	return c.patch(ctx, fmt.Sprintf("/runs/%s", runID), update, nil)
+	return c.patch(ctx, idPath("/runs", runID), update, nil)
 }
 
 // UpdateRunBatched submits a run update to the background batch worker.
@@ -50,7 +50,7 @@ func (c *Client) UpdateRunBatched(runID string, update RunUpdate) bool {
 // ReadRun retrieves a single run by ID.
 func (c *Client) ReadRun(ctx context.Context, runID string) (*Run, error) {
 	var result Run
-	if err := c.get(ctx, fmt.Sprintf("/runs/%s", runID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/runs", runID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -103,7 +103,7 @@ func WithRunURLProjectID(id string) GetRunURLOption {
 
 // DeleteRun deletes a run by ID.
 func (c *Client) DeleteRun(ctx context.Context, runID string) error {
-	return c.del(ctx, fmt.Sprintf("/runs/%s", runID), nil)
+	return c.del(ctx, idPath("/runs", runID), nil)
 }
 
 // ShareRun creates a publicly accessible link for a run.
@@ -206,8 +206,7 @@ func (it *RunIterator) All(ctx context.Context) ([]Run, error) {
 	return all, nil
 }
 
-// --- URL helpers ---
-
-func pathJoin(base, id string) string {
+// idPath builds a URL path with the given ID safely escaped.
+func idPath(base, id string) string {
 	return fmt.Sprintf("%s/%s", base, url.PathEscape(id))
 }

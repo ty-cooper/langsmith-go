@@ -2,7 +2,6 @@ package langsmith
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"strconv"
 )
@@ -19,7 +18,7 @@ func (c *Client) CreateFeedback(ctx context.Context, create FeedbackCreate) (*Fe
 // ReadFeedback retrieves feedback by ID.
 func (c *Client) ReadFeedback(ctx context.Context, feedbackID string) (*Feedback, error) {
 	var result Feedback
-	if err := c.get(ctx, fmt.Sprintf("/feedback/%s", feedbackID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/feedback", feedbackID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -54,10 +53,10 @@ func (c *Client) ListFeedback(ctx context.Context, opts *ListFeedbackOptions) ([
 
 // UpdateFeedback updates existing feedback.
 func (c *Client) UpdateFeedback(ctx context.Context, feedbackID string, update FeedbackUpdate) error {
-	return c.patch(ctx, fmt.Sprintf("/feedback/%s", feedbackID), update, nil)
+	return c.patch(ctx, idPath("/feedback", feedbackID), update, nil)
 }
 
 // DeleteFeedback deletes feedback by ID.
 func (c *Client) DeleteFeedback(ctx context.Context, feedbackID string) error {
-	return c.del(ctx, fmt.Sprintf("/feedback/%s", feedbackID), nil)
+	return c.del(ctx, idPath("/feedback", feedbackID), nil)
 }

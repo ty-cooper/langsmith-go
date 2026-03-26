@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -156,6 +158,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = &LangSmithError{Message: "request failed", Err: err}
+			if !isRetryableNetError(err) {
+				return lastErr
+			}
 			continue
 		}
 
@@ -203,4 +208,18 @@ func (c *Client) submitBatch(action string, payload any) bool {
 		Action:     action,
 		RunPayload: payload,
 	})
+}
+
+// isRetryableNetError returns true for transient network errors (timeouts,
+// temporary failures). Non-transient errors like DNS resolution failures
+// or TLS handshake errors are not retried.
+func isRetryableNetError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
 }

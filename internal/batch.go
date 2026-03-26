@@ -2,6 +2,7 @@ package internal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type BatchWorker struct {
 
 	closed atomic.Bool
 	wg     sync.WaitGroup
+	cancel context.CancelFunc
 	done   chan struct{}
 }
 
@@ -74,6 +76,8 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 		cfg.Logger = slog.Default()
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	w := &BatchWorker{
 		apiURL:     cfg.APIURL,
 		apiKey:     cfg.APIKey,
@@ -83,11 +87,12 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 		interval:   cfg.Interval,
 		onError:    cfg.OnError,
 		logger:     cfg.Logger,
+		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
 
 	w.wg.Add(1)
-	go w.run()
+	go w.run(ctx)
 	return w
 }
 
@@ -112,9 +117,10 @@ func (w *BatchWorker) Close() {
 		close(w.done)
 	}
 	w.wg.Wait()
+	w.cancel()
 }
 
-func (w *BatchWorker) run() {
+func (w *BatchWorker) run(ctx context.Context) {
 	defer w.wg.Done()
 
 	ticker := time.NewTicker(w.interval)
@@ -127,12 +133,12 @@ func (w *BatchWorker) run() {
 		case item := <-w.queue:
 			batch = append(batch, item)
 			if len(batch) >= w.maxSize {
-				w.flush(batch)
+				w.flush(ctx, batch)
 				batch = nil
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
-				w.flush(batch)
+				w.flush(ctx, batch)
 				batch = nil
 			}
 		case <-w.done:
@@ -143,7 +149,7 @@ func (w *BatchWorker) run() {
 					batch = append(batch, item)
 				default:
 					if len(batch) > 0 {
-						w.flush(batch)
+						w.flush(ctx, batch)
 					}
 					return
 				}
@@ -152,7 +158,7 @@ func (w *BatchWorker) run() {
 	}
 }
 
-func (w *BatchWorker) flush(batch []BatchItem) {
+func (w *BatchWorker) flush(ctx context.Context, batch []BatchItem) {
 	if len(batch) == 0 {
 		return
 	}
@@ -183,7 +189,7 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 	}
 
 	url := fmt.Sprintf("%s/runs/batch", w.apiURL)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		w.reportError(fmt.Errorf("batch flush: create request: %w", err), len(batch))
 		return
@@ -197,11 +203,13 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 		return
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 300 {
-		w.reportError(fmt.Errorf("batch flush: unexpected status %d", resp.StatusCode), len(batch))
+		respBody, _ := io.ReadAll(resp.Body)
+		w.reportError(fmt.Errorf("batch flush: status %d: %s", resp.StatusCode, respBody), len(batch))
+		return
 	}
+	io.Copy(io.Discard, resp.Body)
 }
 
 func (w *BatchWorker) reportError(err error, itemCount int) {

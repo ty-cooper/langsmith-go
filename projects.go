@@ -19,7 +19,7 @@ func (c *Client) CreateProject(ctx context.Context, create TracerSessionCreate) 
 // ReadProject retrieves a project by ID.
 func (c *Client) ReadProject(ctx context.Context, projectID string) (*TracerSession, error) {
 	var result TracerSession
-	if err := c.get(ctx, fmt.Sprintf("/sessions/%s", projectID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/sessions", projectID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -67,7 +67,7 @@ func (c *Client) ListProjects(ctx context.Context, opts *ListProjectsOptions) ([
 // UpdateProject updates a project.
 func (c *Client) UpdateProject(ctx context.Context, projectID string, update TracerSessionUpdate) (*TracerSession, error) {
 	var result TracerSession
-	if err := c.patch(ctx, fmt.Sprintf("/sessions/%s", projectID), update, &result); err != nil {
+	if err := c.patch(ctx, idPath("/sessions", projectID), update, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -75,7 +75,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, update Tra
 
 // DeleteProject deletes a project by ID.
 func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
-	return c.del(ctx, fmt.Sprintf("/sessions/%s", projectID), nil)
+	return c.del(ctx, idPath("/sessions", projectID), nil)
 }
 
 // DeleteProjectByName deletes a project by name.

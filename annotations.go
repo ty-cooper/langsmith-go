@@ -40,7 +40,7 @@ func (c *Client) ListAnnotationQueues(ctx context.Context, opts *ListAnnotationQ
 // ReadAnnotationQueue retrieves an annotation queue by ID.
 func (c *Client) ReadAnnotationQueue(ctx context.Context, queueID string) (*AnnotationQueue, error) {
 	var result AnnotationQueue
-	if err := c.get(ctx, fmt.Sprintf("/annotation-queues/%s", queueID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/annotation-queues", queueID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -49,7 +49,7 @@ func (c *Client) ReadAnnotationQueue(ctx context.Context, queueID string) (*Anno
 // UpdateAnnotationQueue updates an annotation queue.
 func (c *Client) UpdateAnnotationQueue(ctx context.Context, queueID string, update AnnotationQueueCreate) (*AnnotationQueue, error) {
 	var result AnnotationQueue
-	if err := c.patch(ctx, fmt.Sprintf("/annotation-queues/%s", queueID), update, &result); err != nil {
+	if err := c.patch(ctx, idPath("/annotation-queues", queueID), update, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -57,7 +57,7 @@ func (c *Client) UpdateAnnotationQueue(ctx context.Context, queueID string, upda
 
 // DeleteAnnotationQueue deletes an annotation queue.
 func (c *Client) DeleteAnnotationQueue(ctx context.Context, queueID string) error {
-	return c.del(ctx, fmt.Sprintf("/annotation-queues/%s", queueID), nil)
+	return c.del(ctx, idPath("/annotation-queues", queueID), nil)
 }
 
 // AddRunsToAnnotationQueue adds runs to an annotation queue.
@@ -76,5 +76,5 @@ func (c *Client) GetRunFromAnnotationQueue(ctx context.Context, queueID string) 
 
 // DeleteRunFromAnnotationQueue removes a run from an annotation queue.
 func (c *Client) DeleteRunFromAnnotationQueue(ctx context.Context, queueID, runID string) error {
-	return c.del(ctx, fmt.Sprintf("/annotation-queues/%s/runs/%s", queueID, runID), nil)
+	return c.del(ctx, fmt.Sprintf("%s/runs/%s", idPath("/annotation-queues", queueID), url.PathEscape(runID)), nil)
 }

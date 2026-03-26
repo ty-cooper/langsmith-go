@@ -22,6 +22,31 @@ func RunTreeFromContext(ctx context.Context) *RunTree {
 	return rt
 }
 
+// startTrace creates or nests a RunTree, posts it, and returns the new
+// context. This is the shared setup for all Trace* functions.
+func startTrace(ctx context.Context, name string, runType RunType, opts ...RunTreeOption) (context.Context, *RunTree) {
+	parent := RunTreeFromContext(ctx)
+
+	var rt *RunTree
+	if parent != nil {
+		rt = parent.CreateChild(name, runType, opts...)
+	} else {
+		rt = NewRunTree(name, runType, opts...)
+	}
+
+	rt.PostRun()
+	return ContextWithRunTree(ctx, rt), rt
+}
+
+// endTrace finalizes a RunTree based on whether an error occurred.
+func endTrace(rt *RunTree, err error, endOpts ...EndOption) {
+	if err != nil {
+		rt.End(WithEndError(err.Error()))
+	} else {
+		rt.End(endOpts...)
+	}
+}
+
 // Trace executes fn within a new child run. If a RunTree exists in the context,
 // the new run becomes its child; otherwise a new root run is created.
 // The run is automatically posted before fn executes and patched after it completes.
@@ -35,25 +60,9 @@ func RunTreeFromContext(ctx context.Context) *RunTree {
 //	    return nil
 //	})
 func Trace(ctx context.Context, name string, runType RunType, fn func(ctx context.Context) error, opts ...RunTreeOption) error {
-	parent := RunTreeFromContext(ctx)
-
-	var rt *RunTree
-	if parent != nil {
-		rt = parent.CreateChild(name, runType, opts...)
-	} else {
-		rt = NewRunTree(name, runType, opts...)
-	}
-
-	rt.PostRun()
-	childCtx := ContextWithRunTree(ctx, rt)
-
+	childCtx, rt := startTrace(ctx, name, runType, opts...)
 	err := fn(childCtx)
-	if err != nil {
-		rt.End(WithEndError(err.Error()))
-	} else {
-		rt.End()
-	}
-
+	endTrace(rt, err)
 	return err
 }
 
@@ -67,25 +76,9 @@ func Trace(ctx context.Context, name string, runType RunType, fn func(ctx contex
 //	    },
 //	)
 func TraceFunc[T any](ctx context.Context, name string, runType RunType, fn func(ctx context.Context) (T, error), opts ...RunTreeOption) (T, error) {
-	parent := RunTreeFromContext(ctx)
-
-	var rt *RunTree
-	if parent != nil {
-		rt = parent.CreateChild(name, runType, opts...)
-	} else {
-		rt = NewRunTree(name, runType, opts...)
-	}
-
-	rt.PostRun()
-	childCtx := ContextWithRunTree(ctx, rt)
-
+	childCtx, rt := startTrace(ctx, name, runType, opts...)
 	result, err := fn(childCtx)
-	if err != nil {
-		rt.End(WithEndError(err.Error()))
-	} else {
-		rt.End(WithEndOutputs(map[string]any{"output": result}))
-	}
-
+	endTrace(rt, err, WithEndOutputs(map[string]any{"output": result}))
 	return result, err
 }
 
@@ -107,26 +100,10 @@ func TraceWithIO[I any, O any](
 	fn func(ctx context.Context, input I) (O, error),
 	opts ...RunTreeOption,
 ) (O, error) {
-	parent := RunTreeFromContext(ctx)
-
-	var rt *RunTree
-	if parent != nil {
-		rt = parent.CreateChild(name, runType, opts...)
-	} else {
-		rt = NewRunTree(name, runType, opts...)
-	}
-
+	childCtx, rt := startTrace(ctx, name, runType, opts...)
 	rt.SetInputs(map[string]any{"input": input})
-	rt.PostRun()
-	childCtx := ContextWithRunTree(ctx, rt)
-
 	result, err := fn(childCtx, input)
-	if err != nil {
-		rt.End(WithEndError(err.Error()))
-	} else {
-		rt.End(WithEndOutputs(map[string]any{"output": result}))
-	}
-
+	endTrace(rt, err, WithEndOutputs(map[string]any{"output": result}))
 	return result, err
 }
 

@@ -24,7 +24,7 @@ func (c *Client) CreateDataset(ctx context.Context, create DatasetCreate) (*Data
 // ReadDataset retrieves a dataset by ID.
 func (c *Client) ReadDataset(ctx context.Context, datasetID string) (*Dataset, error) {
 	var result Dataset
-	if err := c.get(ctx, fmt.Sprintf("/datasets/%s", datasetID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/datasets", datasetID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -72,7 +72,7 @@ func (c *Client) ListDatasets(ctx context.Context, opts *ListDatasetsOptions) ([
 // UpdateDataset updates a dataset.
 func (c *Client) UpdateDataset(ctx context.Context, datasetID string, update DatasetUpdate) (*Dataset, error) {
 	var result Dataset
-	if err := c.patch(ctx, fmt.Sprintf("/datasets/%s", datasetID), update, &result); err != nil {
+	if err := c.patch(ctx, idPath("/datasets", datasetID), update, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -80,7 +80,7 @@ func (c *Client) UpdateDataset(ctx context.Context, datasetID string, update Dat
 
 // DeleteDataset deletes a dataset by ID.
 func (c *Client) DeleteDataset(ctx context.Context, datasetID string) error {
-	return c.del(ctx, fmt.Sprintf("/datasets/%s", datasetID), nil)
+	return c.del(ctx, idPath("/datasets", datasetID), nil)
 }
 
 // CloneDataset clones a dataset with a new name.

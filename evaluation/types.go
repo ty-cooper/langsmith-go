@@ -1,6 +1,7 @@
 package evaluation
 
 import (
+	"context"
 	"time"
 
 	langsmith "github.com/ty-cooper/langsmith-go"
@@ -32,13 +33,14 @@ type ExperimentResultRow struct {
 
 // ExperimentResults represents the full results of an evaluation experiment.
 type ExperimentResults struct {
-	ExperimentName string         `json:"experiment_name"`
-	ProjectID      string         `json:"project_id,omitempty"`
-	DatasetID      string         `json:"dataset_id"`
-	DatasetName    string         `json:"dataset_name"`
-	CreatedAt      time.Time      `json:"created_at"`
-	Results        []ExperimentResultRow `json:"results"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
+	ExperimentName string                  `json:"experiment_name"`
+	ProjectID      string                  `json:"project_id,omitempty"`
+	DatasetID      string                  `json:"dataset_id"`
+	DatasetName    string                  `json:"dataset_name"`
+	CreatedAt      time.Time               `json:"created_at"`
+	Results        []ExperimentResultRow   `json:"results"`
+	SummaryResults []SummaryEvaluationResult `json:"summary_results,omitempty"`
+	Metadata       map[string]any          `json:"metadata,omitempty"`
 }
 
 // SummaryEvaluationResult represents an aggregate evaluation result.
@@ -49,9 +51,9 @@ type SummaryEvaluationResult struct {
 	Comment *string  `json:"comment,omitempty"`
 }
 
-// TargetFunc is the function under evaluation. It takes example inputs
-// and returns outputs.
-type TargetFunc func(inputs map[string]any) (map[string]any, error)
+// TargetFunc is the function under evaluation. It receives a context for
+// cancellation and the example inputs, and returns outputs.
+type TargetFunc func(ctx context.Context, inputs map[string]any) (map[string]any, error)
 
 // RunExample pairs a run with the example that produced it.
 type RunExample struct {

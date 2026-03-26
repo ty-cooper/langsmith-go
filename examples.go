@@ -29,7 +29,7 @@ func (c *Client) CreateExamples(ctx context.Context, creates []ExampleCreate) ([
 // ReadExample retrieves an example by ID.
 func (c *Client) ReadExample(ctx context.Context, exampleID string) (*Example, error) {
 	var result Example
-	if err := c.get(ctx, fmt.Sprintf("/examples/%s", exampleID), nil, &result); err != nil {
+	if err := c.get(ctx, idPath("/examples", exampleID), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -67,7 +67,7 @@ func (c *Client) ListExamples(ctx context.Context, opts ListExamplesOptions) ([]
 // UpdateExample updates an existing example.
 func (c *Client) UpdateExample(ctx context.Context, exampleID string, update ExampleUpdate) (*Example, error) {
 	var result Example
-	if err := c.patch(ctx, fmt.Sprintf("/examples/%s", exampleID), update, &result); err != nil {
+	if err := c.patch(ctx, idPath("/examples", exampleID), update, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -94,7 +94,7 @@ func (c *Client) UpdateExamples(ctx context.Context, updates map[string]ExampleU
 
 // DeleteExample deletes an example by ID.
 func (c *Client) DeleteExample(ctx context.Context, exampleID string) error {
-	return c.del(ctx, fmt.Sprintf("/examples/%s", exampleID), nil)
+	return c.del(ctx, idPath("/examples", exampleID), nil)
 }
 
 // DeleteExamples deletes multiple examples by their IDs.
