@@ -3,9 +3,7 @@ package langsmith
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -133,32 +131,9 @@ func (c *Client) UploadCSV(ctx context.Context, datasetName string, csvData []by
 		return nil, fmt.Errorf("upload csv: close multipart writer: %w", err)
 	}
 
-	fullURL := c.endpoint + "/datasets/upload"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, &buf)
-	if err != nil {
-		return nil, fmt.Errorf("upload csv: create request: %w", err)
-	}
-	req.Header.Set("X-API-Key", c.apiKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("upload csv: http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("upload csv: read response: %w", err)
-	}
-
-	if resp.StatusCode >= 300 {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
-	}
-
 	var result Dataset
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("upload csv: decode response: %w", err)
+	if err := c.doRequestRaw(ctx, http.MethodPost, "/datasets/upload", buf.Bytes(), writer.FormDataContentType(), &result); err != nil {
+		return nil, err
 	}
 	return &result, nil
 }

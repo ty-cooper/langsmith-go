@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -168,6 +169,12 @@ func (w *BatchWorker) run() {
 	}
 }
 
+const (
+	flushMaxRetries    = 3
+	flushInitialBackoff = 500 * time.Millisecond
+	flushMaxBackoff    = 10 * time.Second
+)
+
 func (w *BatchWorker) flush(batch []BatchItem) {
 	if len(batch) == 0 {
 		return
@@ -198,31 +205,74 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 		return
 	}
 
+	var lastErr error
+	for attempt := 0; attempt <= flushMaxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := flushInitialBackoff << (attempt - 1)
+			if backoff > flushMaxBackoff {
+				backoff = flushMaxBackoff
+			}
+			time.Sleep(backoff)
+		}
+
+		err := w.doFlush(body)
+		if err == nil {
+			return
+		}
+		lastErr = err
+
+		// Only retry on server errors (5xx) or 429.
+		if !isRetryableFlushError(err) {
+			break
+		}
+	}
+
+	w.reportError(fmt.Errorf("batch flush: %w", lastErr), len(batch))
+}
+
+func (w *BatchWorker) doFlush(body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/runs/batch", w.apiURL)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	flushURL := fmt.Sprintf("%s/runs/batch", w.apiURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", flushURL, bytes.NewReader(body))
 	if err != nil {
-		w.reportError(fmt.Errorf("batch flush: create request: %w", err), len(batch))
-		return
+		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", w.apiKey)
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		w.reportError(fmt.Errorf("batch flush: http request: %w", err), len(batch))
-		return
+		return fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		w.reportError(fmt.Errorf("batch flush: status %d: %s", resp.StatusCode, respBody), len(batch))
-		return
+		return &flushError{statusCode: resp.StatusCode, body: string(respBody)}
 	}
 	io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// flushError carries the HTTP status so retry logic can inspect it.
+type flushError struct {
+	statusCode int
+	body       string
+}
+
+func (e *flushError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.statusCode, e.body)
+}
+
+func isRetryableFlushError(err error) bool {
+	var fe *flushError
+	if errors.As(err, &fe) {
+		return fe.statusCode == 429 || fe.statusCode >= 500
+	}
+	// Network-level errors are retryable.
+	return true
 }
 
 func (w *BatchWorker) reportError(err error, itemCount int) {

@@ -73,10 +73,12 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 }
 
 // Close shuts down the client and flushes any pending batched runs.
+// Safe to call even if no batched operations were ever performed.
 func (c *Client) Close() {
-	if c.batch != nil {
-		c.batch.Close()
-	}
+	// Run through the Once so we either get the existing worker or
+	// create one that immediately drains (no items queued). This
+	// avoids racing with a concurrent initBatch() call.
+	c.initBatch().Close()
 }
 
 // Endpoint returns the configured API endpoint.
@@ -191,6 +193,78 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 			Body:       string(respBody),
 		}
 		// Try to extract message from JSON error response.
+		var errResp struct {
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Detail != "" {
+			apiErr.Message = errResp.Detail
+		}
+
+		if !apiErr.IsRetryable() {
+			return apiErr
+		}
+		lastErr = apiErr
+	}
+
+	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// doRequestRaw is like doRequest but accepts pre-built body bytes and a custom
+// content type. Used for multipart uploads and other non-JSON request bodies.
+func (c *Client) doRequestRaw(ctx context.Context, method, path string, bodyBytes []byte, contentType string, result any) error {
+	fullURL := c.endpoint + path
+
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * 500 * time.Millisecond
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, fullURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return &LangSmithError{Message: "failed to create request", Err: err}
+		}
+		req.Header.Set("X-API-Key", c.apiKey)
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = &LangSmithError{Message: "request failed", Err: err}
+			if !isRetryableNetError(err) {
+				return lastErr
+			}
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = &LangSmithError{Message: "failed to read response body", Err: err}
+			continue
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if result != nil && len(respBody) > 0 {
+				if err := json.Unmarshal(respBody, result); err != nil {
+					return &LangSmithError{Message: "failed to decode response", Err: err}
+				}
+			}
+			return nil
+		}
+
+		apiErr := &APIError{
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+		}
 		var errResp struct {
 			Detail string `json:"detail"`
 		}

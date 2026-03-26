@@ -2,12 +2,17 @@ package langsmith
 
 import (
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ty-cooper/langsmith-go/internal"
 )
+
+// uuidPattern matches UUID v4/v7 format strings.
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // RunTree represents a hierarchical execution trace.
 // It manages parent-child relationships and can post/patch runs
@@ -267,20 +272,20 @@ func (rt *RunTree) buildCreateLocked() RunCreate {
 		StartTime:          rt.StartTime,
 		EndTime:            rt.EndTime,
 		Error:              rt.Error,
-		Inputs:             rt.Inputs,
-		Outputs:            rt.Outputs,
+		Inputs:             copyMap(rt.Inputs),
+		Outputs:            copyMap(rt.Outputs),
 		ParentRunID:        rt.ParentRunID,
 		TraceID:            rt.TraceID,
 		DottedOrder:        rt.DottedOrder,
 		SessionName:        rt.SessionName,
 		SessionID:          rt.SessionID,
 		ReferenceExampleID: rt.ReferenceExampleID,
-		Tags:               rt.Tags,
-		Metadata:           rt.Metadata,
-		Events:             rt.Events,
-		Serialized:         rt.Serialized,
-		Extra:              rt.Extra,
-		Attachments:        rt.Attachments,
+		Tags:               copySlice(rt.Tags),
+		Metadata:           copyMap(rt.Metadata),
+		Events:             copyEvents(rt.Events),
+		Serialized:         copyMap(rt.Serialized),
+		Extra:              copyMap(rt.Extra),
+		Attachments:        copyAttachments(rt.Attachments),
 	}
 }
 
@@ -288,12 +293,58 @@ func (rt *RunTree) buildUpdateLocked() RunUpdate {
 	return RunUpdate{
 		EndTime:  rt.EndTime,
 		Error:    rt.Error,
-		Outputs:  rt.Outputs,
-		Events:   rt.Events,
-		Tags:     rt.Tags,
-		Metadata: rt.Metadata,
-		Extra:    rt.Extra,
+		Outputs:  copyMap(rt.Outputs),
+		Events:   copyEvents(rt.Events),
+		Tags:     copySlice(rt.Tags),
+		Metadata: copyMap(rt.Metadata),
+		Extra:    copyMap(rt.Extra),
 	}
+}
+
+// copyMap returns a shallow copy of a map[string]any. Returns nil for nil input.
+func copyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// copySlice returns a copy of a string slice. Returns nil for nil input.
+func copySlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+// copyEvents returns a copy of an events slice. Returns nil for nil input.
+func copyEvents(events []map[string]any) []map[string]any {
+	if events == nil {
+		return nil
+	}
+	out := make([]map[string]any, len(events))
+	for i, e := range events {
+		out[i] = copyMap(e)
+	}
+	return out
+}
+
+// copyAttachments returns a copy of an attachments map. Returns nil for nil input.
+func copyAttachments(m map[string]Attachment) map[string]Attachment {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]Attachment, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // --- Header Serialization ---
@@ -307,6 +358,7 @@ const (
 )
 
 // ToHeaders serializes the RunTree trace context into HTTP headers.
+// Values are percent-encoded per the W3C Baggage specification.
 func (rt *RunTree) ToHeaders() http.Header {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -315,14 +367,14 @@ func (rt *RunTree) ToHeaders() http.Header {
 	h.Set(HeaderParentID, rt.ID)
 
 	parts := []string{
-		"langsmith-trace_id=" + rt.TraceID,
-		"langsmith-dotted_order=" + rt.DottedOrder,
+		"langsmith-trace_id=" + url.QueryEscape(rt.TraceID),
+		"langsmith-dotted_order=" + url.QueryEscape(rt.DottedOrder),
 	}
 	if rt.SessionName != "" {
-		parts = append(parts, "langsmith-session_name="+rt.SessionName)
+		parts = append(parts, "langsmith-session_name="+url.QueryEscape(rt.SessionName))
 	}
 	if rt.SessionID != nil {
-		parts = append(parts, "langsmith-session_id="+*rt.SessionID)
+		parts = append(parts, "langsmith-session_id="+url.QueryEscape(*rt.SessionID))
 	}
 	h.Set(HeaderBaggage, strings.Join(parts, ","))
 
@@ -331,9 +383,13 @@ func (rt *RunTree) ToHeaders() http.Header {
 
 // RunTreeFromHeaders reconstructs minimal RunTree context from HTTP headers.
 // The returned RunTree can be used as a parent for CreateChild.
+// Returns nil if the headers are missing or contain invalid trace IDs.
 func RunTreeFromHeaders(headers http.Header, client *Client) *RunTree {
 	parentID := headers.Get(HeaderParentID)
 	if parentID == "" {
+		return nil
+	}
+	if !isValidUUID(parentID) {
 		return nil
 	}
 
@@ -349,18 +405,36 @@ func RunTreeFromHeaders(headers http.Header, client *Client) *RunTree {
 			if len(kv) != 2 {
 				continue
 			}
+			val, err := url.QueryUnescape(kv[1])
+			if err != nil {
+				continue
+			}
 			switch kv[0] {
 			case "langsmith-trace_id":
-				rt.TraceID = kv[1]
+				if isValidUUID(val) {
+					rt.TraceID = val
+				}
 			case "langsmith-dotted_order":
-				rt.DottedOrder = kv[1]
+				rt.DottedOrder = val
 			case "langsmith-session_name":
-				rt.SessionName = kv[1]
+				rt.SessionName = val
 			case "langsmith-session_id":
-				rt.SessionID = &kv[1]
+				if isValidUUID(val) {
+					rt.SessionID = &val
+				}
 			}
 		}
 	}
 
+	// If trace ID wasn't provided or was invalid, fall back to parent ID.
+	if rt.TraceID == "" {
+		rt.TraceID = parentID
+	}
+
 	return rt
+}
+
+// isValidUUID checks that s matches the standard UUID format.
+func isValidUUID(s string) bool {
+	return uuidPattern.MatchString(s)
 }
