@@ -169,7 +169,7 @@ func (c *Client) DatasetDiff(ctx context.Context, datasetID string, fromVersion,
 	q.Set("from_version", fromVersion)
 	q.Set("to_version", toVersion)
 	var result map[string]any
-	if err := c.get(ctx, fmt.Sprintf("/datasets/%s/diff", datasetID), q, &result); err != nil {
+	if err := c.get(ctx, fmt.Sprintf("%s/diff", idPath("/datasets", datasetID)), q, &result); err != nil {
 		return nil, err
 	}
 	return result, nil

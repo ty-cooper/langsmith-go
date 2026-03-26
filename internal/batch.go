@@ -38,7 +38,6 @@ type BatchWorker struct {
 
 	closed atomic.Bool
 	wg     sync.WaitGroup
-	cancel context.CancelFunc
 	done   chan struct{}
 }
 
@@ -76,8 +75,6 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 		cfg.Logger = slog.Default()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	w := &BatchWorker{
 		apiURL:     cfg.APIURL,
 		apiKey:     cfg.APIKey,
@@ -87,12 +84,11 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 		interval:   cfg.Interval,
 		onError:    cfg.OnError,
 		logger:     cfg.Logger,
-		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
 
 	w.wg.Add(1)
-	go w.run(ctx)
+	go w.run()
 	return w
 }
 
@@ -117,10 +113,24 @@ func (w *BatchWorker) Close() {
 		close(w.done)
 	}
 	w.wg.Wait()
-	w.cancel()
+
+	// Final drain: catch any items that were submitted between
+	// closed.Store(true) and the run() goroutine finishing its drain.
+	var remaining []BatchItem
+	for {
+		select {
+		case item := <-w.queue:
+			remaining = append(remaining, item)
+		default:
+			if len(remaining) > 0 {
+				w.flush(remaining)
+			}
+			return
+		}
+	}
 }
 
-func (w *BatchWorker) run(ctx context.Context) {
+func (w *BatchWorker) run() {
 	defer w.wg.Done()
 
 	ticker := time.NewTicker(w.interval)
@@ -133,12 +143,12 @@ func (w *BatchWorker) run(ctx context.Context) {
 		case item := <-w.queue:
 			batch = append(batch, item)
 			if len(batch) >= w.maxSize {
-				w.flush(ctx, batch)
+				w.flush(batch)
 				batch = nil
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
-				w.flush(ctx, batch)
+				w.flush(batch)
 				batch = nil
 			}
 		case <-w.done:
@@ -149,7 +159,7 @@ func (w *BatchWorker) run(ctx context.Context) {
 					batch = append(batch, item)
 				default:
 					if len(batch) > 0 {
-						w.flush(ctx, batch)
+						w.flush(batch)
 					}
 					return
 				}
@@ -158,7 +168,7 @@ func (w *BatchWorker) run(ctx context.Context) {
 	}
 }
 
-func (w *BatchWorker) flush(ctx context.Context, batch []BatchItem) {
+func (w *BatchWorker) flush(batch []BatchItem) {
 	if len(batch) == 0 {
 		return
 	}
@@ -187,6 +197,9 @@ func (w *BatchWorker) flush(ctx context.Context, batch []BatchItem) {
 		w.reportError(fmt.Errorf("batch flush: marshal payload: %w", err), len(batch))
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	url := fmt.Sprintf("%s/runs/batch", w.apiURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))

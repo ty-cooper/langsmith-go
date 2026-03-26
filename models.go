@@ -295,7 +295,7 @@ type FeedbackUpdate struct {
 
 // ListFeedbackOptions contains options for listing feedback.
 type ListFeedbackOptions struct {
-	RunID  *string
+	// RunIDs filters feedback to these run IDs.
 	RunIDs []string
 	Key    *string
 	Limit  *int

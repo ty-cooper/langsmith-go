@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ty-cooper/langsmith-go/internal"
@@ -24,7 +25,10 @@ type Client struct {
 	project    string
 	httpClient *http.Client
 	maxRetries int
-	batch      *internal.BatchWorker
+
+	batchOnce sync.Once
+	batchCfg  internal.BatchWorkerConfig
+	batch     *internal.BatchWorker
 }
 
 // NewClient creates a new LangSmith client with the given options.
@@ -51,7 +55,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		maxRetries: cfg.maxRetries,
 	}
 
-	batchCfg := internal.BatchWorkerConfig{
+	c.batchCfg = internal.BatchWorkerConfig{
 		APIURL:     c.endpoint,
 		APIKey:     c.apiKey,
 		HTTPClient: c.httpClient,
@@ -59,12 +63,11 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		Interval:   cfg.batchInterval,
 	}
 	if cfg.logger != nil {
-		batchCfg.Logger = cfg.logger
+		c.batchCfg.Logger = cfg.logger
 	}
 	if cfg.onBatchError != nil {
-		batchCfg.OnError = cfg.onBatchError
+		c.batchCfg.OnError = cfg.onBatchError
 	}
-	c.batch = internal.NewBatchWorker(batchCfg)
 
 	return c, nil
 }
@@ -133,6 +136,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * 500 * time.Millisecond
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -201,10 +207,18 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
+// initBatch lazily starts the background batch worker on first use.
+func (c *Client) initBatch() *internal.BatchWorker {
+	c.batchOnce.Do(func() {
+		c.batch = internal.NewBatchWorker(c.batchCfg)
+	})
+	return c.batch
+}
+
 // submitBatch submits a run to the background batch worker.
 // Returns false if the queue is full or the worker has been closed.
 func (c *Client) submitBatch(action string, payload any) bool {
-	return c.batch.Submit(internal.BatchItem{
+	return c.initBatch().Submit(internal.BatchItem{
 		Action:     action,
 		RunPayload: payload,
 	})

@@ -166,11 +166,16 @@ func (it *RunIterator) Next(ctx context.Context) (*Run, error) {
 		if it.done {
 			return nil, nil
 		}
-		it.opts.Offset = it.offset
-		if it.opts.Limit == nil {
-			it.opts.Limit = IntPtr(100)
+
+		// Use a local copy to avoid mutating the caller's options.
+		fetchOpts := it.opts
+		fetchOpts.Offset = it.offset
+		if fetchOpts.Limit == nil {
+			limit := 100
+			fetchOpts.Limit = &limit
 		}
-		runs, err := it.client.ListRuns(ctx, it.opts)
+
+		runs, err := it.client.ListRuns(ctx, fetchOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +185,7 @@ func (it *RunIterator) Next(ctx context.Context) (*Run, error) {
 		}
 		it.buffer = runs
 		it.offset += len(runs)
-		if len(runs) < *it.opts.Limit {
+		if len(runs) < *fetchOpts.Limit {
 			it.done = true
 		}
 	}

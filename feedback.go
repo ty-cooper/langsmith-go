@@ -28,9 +28,6 @@ func (c *Client) ReadFeedback(ctx context.Context, feedbackID string) (*Feedback
 func (c *Client) ListFeedback(ctx context.Context, opts *ListFeedbackOptions) ([]Feedback, error) {
 	q := url.Values{}
 	if opts != nil {
-		if opts.RunID != nil {
-			q.Set("run", *opts.RunID)
-		}
 		for _, id := range opts.RunIDs {
 			q.Add("run", id)
 		}

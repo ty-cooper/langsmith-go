@@ -32,9 +32,8 @@ func (f SummaryEvaluatorFunc) EvaluateSummary(runs []RunExample) ([]SummaryEvalu
 
 // StringEvaluator evaluates by comparing string predictions against string references.
 type StringEvaluator struct {
-	Key        string
-	EvalFunc   func(prediction, reference string) (*EvaluationResult, error)
-	InputKey   string
+	Key           string
+	EvalFunc      func(prediction, reference string) (*EvaluationResult, error)
 	PredictionKey string
 	ReferenceKey  string
 }

@@ -2,6 +2,7 @@ package langsmith
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -167,6 +168,15 @@ func TracingMiddleware(client *Client, projectName string) func(http.Handler) ht
 
 			ctx := ContextWithRunTree(r.Context(), rt)
 			rc := &responseCapture{ResponseWriter: w, statusCode: http.StatusOK}
+
+			defer func() {
+				if rec := recover(); rec != nil {
+					errMsg := fmt.Sprintf("panic: %v", rec)
+					rt.End(WithEndError(errMsg))
+					panic(rec) // re-panic after recording the run
+				}
+			}()
+
 			next.ServeHTTP(rc, r.WithContext(ctx))
 
 			rt.End(WithEndOutputs(map[string]any{

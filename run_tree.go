@@ -13,7 +13,9 @@ import (
 // It manages parent-child relationships and can post/patch runs
 // to LangSmith via a background batch worker.
 //
-// RunTree is safe for concurrent use from multiple goroutines.
+// The exported methods (SetInputs, SetOutputs, AddMetadata, etc.) are safe
+// for concurrent use. However, direct field access (e.g. rt.Outputs["k"] = v)
+// is NOT protected by the mutex — use the provided methods instead.
 type RunTree struct {
 	mu sync.Mutex
 

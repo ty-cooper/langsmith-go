@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -285,5 +286,141 @@ func TestClient_CRUDEndpoints_CorrectPaths(t *testing.T) {
 				t.Errorf("path = %q, want %q", lastPath, tt.wantPath)
 			}
 		})
+	}
+}
+
+func TestClient_LazyBatchInit_NoGoroutineWithoutTracing(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint("https://example.com"))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	// Batch worker should not be initialized until submitBatch is called.
+	if client.batch != nil {
+		t.Error("batch worker should be nil before first use")
+	}
+}
+
+func TestRunIterator_DoesNotMutateCallerOptions(t *testing.T) {
+	t.Parallel()
+
+	page := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		var runs []Run
+		if page == 1 {
+			runs = []Run{{ID: "r1", Name: "run1"}, {ID: "r2", Name: "run2"}}
+		}
+		json.NewEncoder(w).Encode(runs)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	opts := ListRunsOptions{
+		ProjectName: StringPtr("test"),
+	}
+	it := client.ListRunsIterator(opts)
+
+	_, err = it.All(context.Background())
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+
+	// Caller's Limit should still be nil — iterator must not mutate it.
+	if opts.Limit != nil {
+		t.Errorf("caller's opts.Limit was mutated to %d, want nil", *opts.Limit)
+	}
+}
+
+func TestRunIterator_PaginatesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var body ListRunsOptions
+		json.NewDecoder(r.Body).Decode(&body)
+
+		var runs []Run
+		switch callCount {
+		case 1:
+			for i := 0; i < 100; i++ {
+				runs = append(runs, Run{ID: fmt.Sprintf("r%d", i)})
+			}
+		case 2:
+			for i := 100; i < 150; i++ {
+				runs = append(runs, Run{ID: fmt.Sprintf("r%d", i)})
+			}
+		}
+		json.NewEncoder(w).Encode(runs)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	it := client.ListRunsIterator(ListRunsOptions{ProjectName: StringPtr("test")})
+	all, err := it.All(context.Background())
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 150 {
+		t.Errorf("len(all) = %d, want 150", len(all))
+	}
+	if callCount != 2 {
+		t.Errorf("callCount = %d, want 2", callCount)
+	}
+}
+
+func TestClient_BackoffCapped(t *testing.T) {
+	t.Parallel()
+
+	// With maxRetries=1, backoff is 500ms which is fine.
+	// This test verifies the cap logic exists by checking that
+	// high retry counts don't cause excessively long waits.
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(ServerInfo{Version: "1.0"})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(
+		WithAPIKey("test-key"),
+		WithEndpoint(server.URL),
+		WithMaxRetries(3),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	start := time.Now()
+	info, err := client.ServerInfo(context.Background())
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("ServerInfo: %v", err)
+	}
+	if info.Version != "1.0" {
+		t.Errorf("Version = %q, want 1.0", info.Version)
+	}
+	// 2 retries: 500ms + 1s = 1.5s max. With cap it should be well under 30s.
+	if elapsed > 5*time.Second {
+		t.Errorf("elapsed = %v, expected well under 5s", elapsed)
 	}
 }

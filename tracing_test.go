@@ -3,6 +3,7 @@ package langsmith
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -190,5 +191,128 @@ func TestGetRunURL_NoTrailingQuestionMark(t *testing.T) {
 	gotWithProject := client.GetRunURL("run-123", WithRunURLProjectID("proj-1"))
 	if gotWithProject[len(gotWithProject)-1] == '?' {
 		t.Errorf("URL with project ends with '?': %q", gotWithProject)
+	}
+}
+
+func TestTracingMiddleware_CapturesStatusCode(t *testing.T) {
+	t.Parallel()
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(backend.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	var capturedRT *RunTree
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRT = RunTreeFromContext(r.Context())
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := TracingMiddleware(client, "test-project")(inner)
+	req := httptest.NewRequest("GET", "/api/test", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if capturedRT == nil {
+		t.Fatal("expected RunTree in request context")
+	}
+	if capturedRT.Name != "GET /api/test" {
+		t.Errorf("Name = %q, want %q", capturedRT.Name, "GET /api/test")
+	}
+}
+
+func TestTracingMiddleware_PanicRecovery(t *testing.T) {
+	t.Parallel()
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(backend.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	var capturedRT *RunTree
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRT = RunTreeFromContext(r.Context())
+		panic("test panic")
+	})
+
+	handler := TracingMiddleware(client, "test-project")(inner)
+	req := httptest.NewRequest("GET", "/panic", nil)
+	rec := httptest.NewRecorder()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic to be re-raised")
+		}
+		if capturedRT == nil {
+			t.Fatal("expected RunTree to be captured")
+		}
+		if capturedRT.Error == nil {
+			t.Fatal("expected Error to be set on panic")
+		}
+		if capturedRT.EndTime == nil {
+			t.Fatal("expected EndTime to be set on panic")
+		}
+	}()
+
+	handler.ServeHTTP(rec, req)
+}
+
+func TestTracingMiddleware_InheritsParentFromHeaders(t *testing.T) {
+	t.Parallel()
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(backend.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	parent := NewRunTree("parent", RunTypeChain, WithRunTreeClient(client), WithRunTreeSessionName("upstream"))
+	parentHeaders := parent.ToHeaders()
+
+	var capturedRT *RunTree
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRT = RunTreeFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := TracingMiddleware(client, "test-project")(inner)
+	req := httptest.NewRequest("POST", "/api/data", nil)
+	for k, v := range parentHeaders {
+		for _, vv := range v {
+			req.Header.Add(k, vv)
+		}
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if capturedRT == nil {
+		t.Fatal("expected RunTree")
+	}
+	if capturedRT.ParentRunID == nil || *capturedRT.ParentRunID != parent.ID {
+		t.Errorf("ParentRunID = %v, want %q", capturedRT.ParentRunID, parent.ID)
+	}
+	if capturedRT.TraceID != parent.TraceID {
+		t.Errorf("TraceID = %q, want %q", capturedRT.TraceID, parent.TraceID)
 	}
 }
