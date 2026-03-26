@@ -2,6 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ty-cooper/langsmith-go.svg)](https://pkg.go.dev/github.com/ty-cooper/langsmith-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Latest Release](https://img.shields.io/github/v/release/ty-cooper/langsmith-go)](https://github.com/ty-cooper/langsmith-go/releases/latest)
 
 This package provides a Go client for [LangSmith](https://smith.langchain.com/) — a platform for debugging, testing, evaluating, and monitoring LLM applications.
 
