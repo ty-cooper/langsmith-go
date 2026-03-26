@@ -1,6 +1,13 @@
 package langsmith
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrNotFound is returned when a resource is not found by name or filter
+// (as opposed to a 404 from the API, which produces an APIError).
+var ErrNotFound = errors.New("langsmith: not found")
 
 // APIError represents an error response from the LangSmith API.
 type APIError struct {
@@ -36,4 +43,26 @@ func (e *LangSmithError) Error() string {
 
 func (e *LangSmithError) Unwrap() error {
 	return e.Err
+}
+
+// AsAPIError extracts an *APIError from err using errors.As.
+// Returns nil if err does not contain an APIError.
+func AsAPIError(err error) *APIError {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr
+	}
+	return nil
+}
+
+// IsNotFound returns true if err represents a not-found condition,
+// either via ErrNotFound or an APIError with status 404.
+func IsNotFound(err error) bool {
+	if errors.Is(err, ErrNotFound) {
+		return true
+	}
+	if apiErr := AsAPIError(err); apiErr != nil {
+		return apiErr.StatusCode == 404
+	}
+	return false
 }

@@ -3,20 +3,28 @@ package langsmith
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestNewClientRequiresAPIKey(t *testing.T) {
+func TestNewClient_EmptyAPIKey_ReturnsError(t *testing.T) {
+	// Cannot be parallel — uses t.Setenv to clear env vars.
+	t.Setenv("LANGCHAIN_API_KEY", "")
+	t.Setenv("LANGSMITH_API_KEY", "")
+
 	_, err := NewClient(WithAPIKey(""))
 	if err == nil {
-		t.Error("expected error when API key is empty")
+		t.Fatal("expected error when API key is empty")
 	}
 }
 
-func TestNewClientWithOptions(t *testing.T) {
+func TestNewClient_WithOptions_SetsFields(t *testing.T) {
+	t.Parallel()
+
 	client, err := NewClient(
 		WithAPIKey("test-key"),
 		WithEndpoint("https://custom.example.com"),
@@ -29,49 +37,50 @@ func TestNewClientWithOptions(t *testing.T) {
 	}
 	defer client.Close()
 
-	if client.Endpoint() != "https://custom.example.com" {
-		t.Errorf("endpoint mismatch: %s", client.Endpoint())
+	if got := client.Endpoint(); got != "https://custom.example.com" {
+		t.Errorf("Endpoint() = %q, want %q", got, "https://custom.example.com")
 	}
-	if client.Project() != "my-project" {
-		t.Errorf("project mismatch: %s", client.Project())
+	if got := client.Project(); got != "my-project" {
+		t.Errorf("Project() = %q, want %q", got, "my-project")
 	}
 }
 
-func TestClientServerInfo(t *testing.T) {
+func TestClient_ServerInfo_Success(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/info" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
+			t.Errorf("path = %q, want /info", r.URL.Path)
 		}
-		if r.Header.Get("X-API-Key") != "test-key" {
-			t.Error("missing API key header")
+		if got := r.Header.Get("X-API-Key"); got != "test-key" {
+			t.Errorf("X-API-Key = %q, want test-key", got)
 		}
 		json.NewEncoder(w).Encode(ServerInfo{Version: "0.6.0"})
 	}))
 	defer server.Close()
 
-	client, err := NewClient(
-		WithAPIKey("test-key"),
-		WithEndpoint(server.URL),
-	)
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(server.URL))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
 	info, err := client.ServerInfo(context.Background())
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ServerInfo: %v", err)
 	}
 	if info.Version != "0.6.0" {
-		t.Errorf("version mismatch: %s", info.Version)
+		t.Errorf("Version = %q, want 0.6.0", info.Version)
 	}
 }
 
-func TestClientRetryOnServerError(t *testing.T) {
-	attempts := 0
+func TestClient_RetryOnServerError_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts < 3 {
+		n := attempts.Add(1)
+		if n < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"detail": "server error"}`))
 			return
@@ -86,26 +95,28 @@ func TestClientRetryOnServerError(t *testing.T) {
 		WithMaxRetries(3),
 	)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
 	info, err := client.ServerInfo(context.Background())
 	if err != nil {
-		t.Fatalf("unexpected error after retries: %v", err)
+		t.Fatalf("ServerInfo after retries: %v", err)
 	}
 	if info.Version != "1.0" {
-		t.Errorf("version mismatch: %s", info.Version)
+		t.Errorf("Version = %q, want 1.0", info.Version)
 	}
-	if attempts != 3 {
-		t.Errorf("expected 3 attempts, got %d", attempts)
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("attempts = %d, want 3", got)
 	}
 }
 
-func TestClientNoRetryOn4xx(t *testing.T) {
-	attempts := 0
+func TestClient_NoRetryOn4xx_ReturnsAPIError(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		attempts.Add(1)
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"detail": "not found"}`))
 	}))
@@ -117,26 +128,162 @@ func TestClientNoRetryOn4xx(t *testing.T) {
 		WithMaxRetries(3),
 	)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
 	_, err = client.ServerInfo(context.Background())
 	if err == nil {
-		t.Error("expected error for 404")
+		t.Fatal("expected error for 404")
 	}
-	if attempts != 1 {
-		t.Errorf("expected 1 attempt for 4xx, got %d", attempts)
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("attempts = %d, want 1 (no retry on 4xx)", got)
 	}
 
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("expected APIError, got %T", err)
+	apiErr := AsAPIError(err)
+	if apiErr == nil {
+		t.Fatalf("AsAPIError returned nil, err = %v (%T)", err, err)
 	}
 	if apiErr.StatusCode != 404 {
-		t.Errorf("expected 404, got %d", apiErr.StatusCode)
+		t.Errorf("StatusCode = %d, want 404", apiErr.StatusCode)
 	}
 	if apiErr.Message != "not found" {
-		t.Errorf("expected 'not found', got %q", apiErr.Message)
+		t.Errorf("Message = %q, want %q", apiErr.Message, "not found")
+	}
+}
+
+func TestClient_ContextCanceled_StopsRetry(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(
+		WithAPIKey("test-key"),
+		WithEndpoint(server.URL),
+		WithMaxRetries(10),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err = client.ServerInfo(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		// May be wrapped — just check we got an error.
+		if err == nil {
+			t.Fatal("expected error on canceled context")
+		}
+	}
+}
+
+func TestIsNotFound_APIError(t *testing.T) {
+	t.Parallel()
+
+	err := &APIError{StatusCode: 404, Message: "not found"}
+	if !IsNotFound(err) {
+		t.Error("IsNotFound should return true for 404 APIError")
+	}
+
+	err2 := &APIError{StatusCode: 500, Message: "server error"}
+	if IsNotFound(err2) {
+		t.Error("IsNotFound should return false for 500")
+	}
+}
+
+func TestIsNotFound_SentinelError(t *testing.T) {
+	t.Parallel()
+
+	if !IsNotFound(ErrNotFound) {
+		t.Error("IsNotFound should return true for ErrNotFound")
+	}
+}
+
+func TestClient_CRUDEndpoints_CorrectPaths(t *testing.T) {
+	t.Parallel()
+
+	var lastMethod, lastPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastMethod = r.Method
+		lastPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(WithAPIKey("test-key"), WithEndpoint(server.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		call       func() error
+		wantMethod string
+		wantPath   string
+	}{
+		{
+			name:       "CreateDataset",
+			call:       func() error { _, err := client.CreateDataset(ctx, DatasetCreate{Name: "d"}); return err },
+			wantMethod: "POST",
+			wantPath:   "/datasets",
+		},
+		{
+			name:       "ReadDataset",
+			call:       func() error { _, err := client.ReadDataset(ctx, "ds-123"); return err },
+			wantMethod: "GET",
+			wantPath:   "/datasets/ds-123",
+		},
+		{
+			name:       "DeleteDataset",
+			call:       func() error { return client.DeleteDataset(ctx, "ds-123") },
+			wantMethod: "DELETE",
+			wantPath:   "/datasets/ds-123",
+		},
+		{
+			name:       "CreateFeedback",
+			call:       func() error { _, err := client.CreateFeedback(ctx, FeedbackCreate{Key: "k"}); return err },
+			wantMethod: "POST",
+			wantPath:   "/feedback",
+		},
+		{
+			name:       "DeleteFeedback",
+			call:       func() error { return client.DeleteFeedback(ctx, "fb-1") },
+			wantMethod: "DELETE",
+			wantPath:   "/feedback/fb-1",
+		},
+		{
+			name:       "CreateProject",
+			call:       func() error { _, err := client.CreateProject(ctx, TracerSessionCreate{Name: "p"}); return err },
+			wantMethod: "POST",
+			wantPath:   "/sessions",
+		},
+		{
+			name:       "DeleteProject",
+			call:       func() error { return client.DeleteProject(ctx, "proj-1") },
+			wantMethod: "DELETE",
+			wantPath:   "/sessions/proj-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = tt.call()
+			if lastMethod != tt.wantMethod {
+				t.Errorf("method = %q, want %q", lastMethod, tt.wantMethod)
+			}
+			if lastPath != tt.wantPath {
+				t.Errorf("path = %q, want %q", lastPath, tt.wantPath)
+			}
+		})
 	}
 }

@@ -1,105 +1,105 @@
 package langsmith
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
-func TestGetAPIKey(t *testing.T) {
-	// Clean up env after test.
-	origLC := os.Getenv("LANGCHAIN_API_KEY")
-	origLS := os.Getenv("LANGSMITH_API_KEY")
-	defer func() {
-		os.Setenv("LANGCHAIN_API_KEY", origLC)
-		os.Setenv("LANGSMITH_API_KEY", origLS)
-	}()
+// Env tests cannot use t.Parallel because t.Setenv prevents it.
 
-	os.Setenv("LANGCHAIN_API_KEY", "")
-	os.Setenv("LANGSMITH_API_KEY", "")
-
-	if got := GetAPIKey(); got != "" {
-		t.Errorf("expected empty, got %q", got)
+func TestGetAPIKey_Precedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		langchain string
+		langsmith string
+		want      string
+	}{
+		{name: "both_empty", langchain: "", langsmith: "", want: ""},
+		{name: "langsmith_only", langchain: "", langsmith: "ls-key", want: "ls-key"},
+		{name: "langchain_takes_precedence", langchain: "lc-key", langsmith: "ls-key", want: "lc-key"},
+		{name: "langchain_only", langchain: "lc-key", langsmith: "", want: "lc-key"},
 	}
 
-	os.Setenv("LANGSMITH_API_KEY", "ls-key")
-	if got := GetAPIKey(); got != "ls-key" {
-		t.Errorf("expected ls-key, got %q", got)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LANGCHAIN_API_KEY", tt.langchain)
+			t.Setenv("LANGSMITH_API_KEY", tt.langsmith)
 
-	os.Setenv("LANGCHAIN_API_KEY", "lc-key")
-	if got := GetAPIKey(); got != "lc-key" {
-		t.Errorf("expected lc-key (LANGCHAIN takes precedence), got %q", got)
+			if got := GetAPIKey(); got != tt.want {
+				t.Errorf("GetAPIKey() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestGetEndpoint(t *testing.T) {
-	origLC := os.Getenv("LANGCHAIN_ENDPOINT")
-	origLS := os.Getenv("LANGSMITH_ENDPOINT")
-	defer func() {
-		os.Setenv("LANGCHAIN_ENDPOINT", origLC)
-		os.Setenv("LANGSMITH_ENDPOINT", origLS)
-	}()
-
-	os.Setenv("LANGCHAIN_ENDPOINT", "")
-	os.Setenv("LANGSMITH_ENDPOINT", "")
-
-	if got := GetEndpoint(); got != defaultEndpoint {
-		t.Errorf("expected default %q, got %q", defaultEndpoint, got)
+func TestGetEndpoint_Precedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		langchain string
+		langsmith string
+		want      string
+	}{
+		{name: "default", langchain: "", langsmith: "", want: defaultEndpoint},
+		{name: "strips_trailing_slash", langchain: "", langsmith: "https://custom.example.com/", want: "https://custom.example.com"},
+		{name: "langchain_takes_precedence", langchain: "https://lc.example.com", langsmith: "https://ls.example.com", want: "https://lc.example.com"},
 	}
 
-	os.Setenv("LANGSMITH_ENDPOINT", "https://custom.example.com/")
-	if got := GetEndpoint(); got != "https://custom.example.com" {
-		t.Errorf("expected trailing slash stripped, got %q", got)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LANGCHAIN_ENDPOINT", tt.langchain)
+			t.Setenv("LANGSMITH_ENDPOINT", tt.langsmith)
 
-	os.Setenv("LANGCHAIN_ENDPOINT", "https://lc.example.com")
-	if got := GetEndpoint(); got != "https://lc.example.com" {
-		t.Errorf("expected LANGCHAIN to take precedence, got %q", got)
+			if got := GetEndpoint(); got != tt.want {
+				t.Errorf("GetEndpoint() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestGetProject(t *testing.T) {
-	origLC := os.Getenv("LANGCHAIN_PROJECT")
-	origLS := os.Getenv("LANGSMITH_PROJECT")
-	defer func() {
-		os.Setenv("LANGCHAIN_PROJECT", origLC)
-		os.Setenv("LANGSMITH_PROJECT", origLS)
-	}()
-
-	os.Setenv("LANGCHAIN_PROJECT", "")
-	os.Setenv("LANGSMITH_PROJECT", "")
-
-	if got := GetProject(); got != defaultProject {
-		t.Errorf("expected default %q, got %q", defaultProject, got)
+func TestGetProject_Precedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		langchain string
+		langsmith string
+		want      string
+	}{
+		{name: "default", langchain: "", langsmith: "", want: defaultProject},
+		{name: "langsmith_only", langchain: "", langsmith: "my-project", want: "my-project"},
+		{name: "langchain_takes_precedence", langchain: "lc-proj", langsmith: "ls-proj", want: "lc-proj"},
 	}
 
-	os.Setenv("LANGSMITH_PROJECT", "my-project")
-	if got := GetProject(); got != "my-project" {
-		t.Errorf("expected my-project, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LANGCHAIN_PROJECT", tt.langchain)
+			t.Setenv("LANGSMITH_PROJECT", tt.langsmith)
+
+			if got := GetProject(); got != tt.want {
+				t.Errorf("GetProject() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestTracingEnabled(t *testing.T) {
-	origV2 := os.Getenv("LANGCHAIN_TRACING_V2")
-	origLS := os.Getenv("LANGSMITH_TRACING")
-	defer func() {
-		os.Setenv("LANGCHAIN_TRACING_V2", origV2)
-		os.Setenv("LANGSMITH_TRACING", origLS)
-	}()
-
-	os.Setenv("LANGCHAIN_TRACING_V2", "")
-	os.Setenv("LANGSMITH_TRACING", "")
-	if TracingEnabled() {
-		t.Error("expected false when both unset")
+func TestTracingEnabled_Values(t *testing.T) {
+	tests := []struct {
+		name    string
+		v2      string
+		tracing string
+		want    bool
+	}{
+		{name: "both_unset", v2: "", tracing: "", want: false},
+		{name: "langsmith_true", v2: "", tracing: "true", want: true},
+		{name: "langsmith_TRUE", v2: "", tracing: "TRUE", want: true},
+		{name: "langchain_1", v2: "1", tracing: "", want: true},
+		{name: "langchain_false", v2: "false", tracing: "", want: false},
+		{name: "langchain_takes_precedence", v2: "true", tracing: "false", want: true},
 	}
 
-	os.Setenv("LANGSMITH_TRACING", "true")
-	if !TracingEnabled() {
-		t.Error("expected true for LANGSMITH_TRACING=true")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LANGCHAIN_TRACING_V2", tt.v2)
+			t.Setenv("LANGSMITH_TRACING", tt.tracing)
 
-	os.Setenv("LANGCHAIN_TRACING_V2", "1")
-	if !TracingEnabled() {
-		t.Error("expected true for LANGCHAIN_TRACING_V2=1")
+			if got := TracingEnabled(); got != tt.want {
+				t.Errorf("TracingEnabled() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

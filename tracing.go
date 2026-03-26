@@ -3,6 +3,7 @@ package langsmith
 import (
 	"context"
 	"net/http"
+	"strconv"
 )
 
 type contextKey string
@@ -28,11 +29,9 @@ func RunTreeFromContext(ctx context.Context) *RunTree {
 // Usage:
 //
 //	err := langsmith.Trace(ctx, "my-step", langsmith.RunTypeChain, func(ctx context.Context) error {
-//	    // ctx now contains the child RunTree
 //	    rt := langsmith.RunTreeFromContext(ctx)
-//	    rt.SetInputs(map[string]interface{}{"question": "hello"})
-//	    // ... do work ...
-//	    rt.SetOutputs(map[string]interface{}{"answer": "world"})
+//	    rt.SetInputs(map[string]any{"question": "hello"})
+//	    rt.SetOutputs(map[string]any{"answer": "world"})
 //	    return nil
 //	})
 func Trace(ctx context.Context, name string, runType RunType, fn func(ctx context.Context) error, opts ...RunTreeOption) error {
@@ -50,8 +49,7 @@ func Trace(ctx context.Context, name string, runType RunType, fn func(ctx contex
 
 	err := fn(childCtx)
 	if err != nil {
-		errStr := err.Error()
-		rt.End(WithEndError(errStr))
+		rt.End(WithEndError(err.Error()))
 	} else {
 		rt.End()
 	}
@@ -60,7 +58,6 @@ func Trace(ctx context.Context, name string, runType RunType, fn func(ctx contex
 }
 
 // TraceFunc is like Trace but for functions that return a value.
-// It uses generics to capture the output type.
 //
 // Usage:
 //
@@ -84,10 +81,9 @@ func TraceFunc[T any](ctx context.Context, name string, runType RunType, fn func
 
 	result, err := fn(childCtx)
 	if err != nil {
-		errStr := err.Error()
-		rt.End(WithEndError(errStr))
+		rt.End(WithEndError(err.Error()))
 	} else {
-		rt.End(WithEndOutputs(map[string]interface{}{"output": result}))
+		rt.End(WithEndOutputs(map[string]any{"output": result}))
 	}
 
 	return result, err
@@ -98,9 +94,9 @@ func TraceFunc[T any](ctx context.Context, name string, runType RunType, fn func
 // Usage:
 //
 //	output, err := langsmith.TraceWithIO(ctx, "classify", langsmith.RunTypeChain,
-//	    map[string]interface{}{"text": "hello"},
-//	    func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
-//	        return map[string]interface{}{"class": "greeting"}, nil
+//	    map[string]any{"text": "hello"},
+//	    func(ctx context.Context, input map[string]any) (map[string]any, error) {
+//	        return map[string]any{"class": "greeting"}, nil
 //	    },
 //	)
 func TraceWithIO[I any, O any](
@@ -120,24 +116,46 @@ func TraceWithIO[I any, O any](
 		rt = NewRunTree(name, runType, opts...)
 	}
 
-	rt.SetInputs(map[string]interface{}{"input": input})
+	rt.SetInputs(map[string]any{"input": input})
 	rt.PostRun()
 	childCtx := ContextWithRunTree(ctx, rt)
 
 	result, err := fn(childCtx, input)
 	if err != nil {
-		errStr := err.Error()
-		rt.End(WithEndError(errStr))
+		rt.End(WithEndError(err.Error()))
 	} else {
-		rt.End(WithEndOutputs(map[string]interface{}{"output": result}))
+		rt.End(WithEndOutputs(map[string]any{"output": result}))
 	}
 
 	return result, err
 }
 
+// responseCapture wraps http.ResponseWriter to capture the status code.
+type responseCapture struct {
+	http.ResponseWriter
+	statusCode int
+	written    bool
+}
+
+func (rc *responseCapture) WriteHeader(code int) {
+	if !rc.written {
+		rc.statusCode = code
+		rc.written = true
+	}
+	rc.ResponseWriter.WriteHeader(code)
+}
+
+func (rc *responseCapture) Write(b []byte) (int, error) {
+	if !rc.written {
+		rc.statusCode = http.StatusOK
+		rc.written = true
+	}
+	return rc.ResponseWriter.Write(b)
+}
+
 // TracingMiddleware returns an HTTP middleware that creates a root RunTree
 // for each incoming request and attaches it to the request context.
-// This is useful for instrumenting HTTP servers.
+// It captures the response status code in the run outputs.
 //
 // Usage:
 //
@@ -148,7 +166,6 @@ func TraceWithIO[I any, O any](
 func TracingMiddleware(client *Client, projectName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check for incoming trace context from upstream.
 			parent := RunTreeFromHeaders(r.Header, client)
 
 			var rt *RunTree
@@ -164,7 +181,7 @@ func TracingMiddleware(client *Client, projectName string) func(http.Handler) ht
 				)
 			}
 
-			rt.SetInputs(map[string]interface{}{
+			rt.SetInputs(map[string]any{
 				"method": r.Method,
 				"path":   r.URL.Path,
 				"query":  r.URL.RawQuery,
@@ -172,9 +189,13 @@ func TracingMiddleware(client *Client, projectName string) func(http.Handler) ht
 			rt.PostRun()
 
 			ctx := ContextWithRunTree(r.Context(), rt)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			rc := &responseCapture{ResponseWriter: w, statusCode: http.StatusOK}
+			next.ServeHTTP(rc, r.WithContext(ctx))
 
-			rt.End()
+			rt.End(WithEndOutputs(map[string]any{
+				"status_code": rc.statusCode,
+				"status":      strconv.Itoa(rc.statusCode) + " " + http.StatusText(rc.statusCode),
+			}))
 		})
 	}
 }

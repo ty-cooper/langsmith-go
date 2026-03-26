@@ -48,7 +48,10 @@ func (c *Client) ListExamples(ctx context.Context, opts ListExamplesOptions) ([]
 		q.Set("offset", strconv.Itoa(opts.Offset))
 	}
 	if opts.Metadata != nil {
-		metaJSON, _ := json.Marshal(opts.Metadata)
+		metaJSON, err := json.Marshal(opts.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("list examples: marshal metadata: %w", err)
+		}
 		q.Set("metadata", string(metaJSON))
 	}
 	if opts.Filter != nil {
@@ -72,11 +75,9 @@ func (c *Client) UpdateExample(ctx context.Context, exampleID string, update Exa
 
 // UpdateExamples updates multiple examples.
 func (c *Client) UpdateExamples(ctx context.Context, updates map[string]ExampleUpdate) error {
-	var payload []map[string]interface{}
+	var payload []map[string]any
 	for id, update := range updates {
-		item := map[string]interface{}{
-			"id": id,
-		}
+		item := map[string]any{"id": id}
 		if update.Inputs != nil {
 			item["inputs"] = update.Inputs
 		}
@@ -93,7 +94,7 @@ func (c *Client) UpdateExamples(ctx context.Context, updates map[string]ExampleU
 
 // DeleteExample deletes an example by ID.
 func (c *Client) DeleteExample(ctx context.Context, exampleID string) error {
-	return c.delete(ctx, fmt.Sprintf("/examples/%s", exampleID), nil)
+	return c.del(ctx, fmt.Sprintf("/examples/%s", exampleID), nil)
 }
 
 // DeleteExamples deletes multiple examples by their IDs.
@@ -102,5 +103,5 @@ func (c *Client) DeleteExamples(ctx context.Context, exampleIDs []string) error 
 	for _, id := range exampleIDs {
 		q.Add("id", id)
 	}
-	return c.delete(ctx, "/examples", q)
+	return c.del(ctx, "/examples", q)
 }

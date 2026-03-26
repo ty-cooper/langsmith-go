@@ -52,15 +52,6 @@ func (c *Client) ListFeedback(ctx context.Context, opts *ListFeedbackOptions) ([
 	return results, nil
 }
 
-// ListFeedbackOptions contains options for listing feedback.
-type ListFeedbackOptions struct {
-	RunID  *string  `json:"run_id,omitempty"`
-	RunIDs []string `json:"run_ids,omitempty"`
-	Key    *string  `json:"key,omitempty"`
-	Limit  *int     `json:"limit,omitempty"`
-	Offset int      `json:"offset,omitempty"`
-}
-
 // UpdateFeedback updates existing feedback.
 func (c *Client) UpdateFeedback(ctx context.Context, feedbackID string, update FeedbackUpdate) error {
 	return c.patch(ctx, fmt.Sprintf("/feedback/%s", feedbackID), update, nil)
@@ -68,5 +59,5 @@ func (c *Client) UpdateFeedback(ctx context.Context, feedbackID string, update F
 
 // DeleteFeedback deletes feedback by ID.
 func (c *Client) DeleteFeedback(ctx context.Context, feedbackID string) error {
-	return c.delete(ctx, fmt.Sprintf("/feedback/%s", feedbackID), nil)
+	return c.del(ctx, fmt.Sprintf("/feedback/%s", feedbackID), nil)
 }

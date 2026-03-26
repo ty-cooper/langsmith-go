@@ -37,13 +37,6 @@ func (c *Client) ListAnnotationQueues(ctx context.Context, opts *ListAnnotationQ
 	return results, nil
 }
 
-// ListAnnotationQueuesOptions contains options for listing annotation queues.
-type ListAnnotationQueuesOptions struct {
-	Name   *string `json:"name,omitempty"`
-	Limit  *int    `json:"limit,omitempty"`
-	Offset int     `json:"offset,omitempty"`
-}
-
 // ReadAnnotationQueue retrieves an annotation queue by ID.
 func (c *Client) ReadAnnotationQueue(ctx context.Context, queueID string) (*AnnotationQueue, error) {
 	var result AnnotationQueue
@@ -64,13 +57,12 @@ func (c *Client) UpdateAnnotationQueue(ctx context.Context, queueID string, upda
 
 // DeleteAnnotationQueue deletes an annotation queue.
 func (c *Client) DeleteAnnotationQueue(ctx context.Context, queueID string) error {
-	return c.delete(ctx, fmt.Sprintf("/annotation-queues/%s", queueID), nil)
+	return c.del(ctx, fmt.Sprintf("/annotation-queues/%s", queueID), nil)
 }
 
 // AddRunsToAnnotationQueue adds runs to an annotation queue.
 func (c *Client) AddRunsToAnnotationQueue(ctx context.Context, queueID string, runIDs []string) error {
-	body := runIDs
-	return c.post(ctx, fmt.Sprintf("/annotation-queues/%s/runs", queueID), body, nil)
+	return c.post(ctx, fmt.Sprintf("/annotation-queues/%s/runs", queueID), runIDs, nil)
 }
 
 // GetRunFromAnnotationQueue gets the next run from an annotation queue.
@@ -84,5 +76,5 @@ func (c *Client) GetRunFromAnnotationQueue(ctx context.Context, queueID string) 
 
 // DeleteRunFromAnnotationQueue removes a run from an annotation queue.
 func (c *Client) DeleteRunFromAnnotationQueue(ctx context.Context, queueID, runID string) error {
-	return c.delete(ctx, fmt.Sprintf("/annotation-queues/%s/runs/%s", queueID, runID), nil)
+	return c.del(ctx, fmt.Sprintf("/annotation-queues/%s/runs/%s", queueID, runID), nil)
 }

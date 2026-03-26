@@ -49,13 +49,20 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		maxRetries: cfg.maxRetries,
 	}
 
-	c.batch = internal.NewBatchWorker(internal.BatchWorkerConfig{
+	batchCfg := internal.BatchWorkerConfig{
 		APIURL:     c.endpoint,
 		APIKey:     c.apiKey,
 		HTTPClient: c.httpClient,
 		BatchSize:  cfg.batchSize,
 		Interval:   cfg.batchInterval,
-	})
+	}
+	if cfg.logger != nil {
+		batchCfg.Logger = cfg.logger
+	}
+	if cfg.onBatchError != nil {
+		batchCfg.OnError = cfg.onBatchError
+	}
+	c.batch = internal.NewBatchWorker(batchCfg)
 
 	return c, nil
 }
@@ -84,39 +91,40 @@ func (c *Client) ServerInfo(ctx context.Context) (*ServerInfo, error) {
 
 // --- HTTP Helpers ---
 
-func (c *Client) get(ctx context.Context, path string, query url.Values, result interface{}) error {
+func (c *Client) get(ctx context.Context, path string, query url.Values, result any) error {
 	return c.doRequest(ctx, http.MethodGet, path, query, nil, result)
 }
 
-func (c *Client) post(ctx context.Context, path string, body interface{}, result interface{}) error {
+func (c *Client) post(ctx context.Context, path string, body any, result any) error {
 	return c.doRequest(ctx, http.MethodPost, path, nil, body, result)
 }
 
-func (c *Client) put(ctx context.Context, path string, body interface{}, result interface{}) error {
+func (c *Client) put(ctx context.Context, path string, body any, result any) error {
 	return c.doRequest(ctx, http.MethodPut, path, nil, body, result)
 }
 
-func (c *Client) patch(ctx context.Context, path string, body interface{}, result interface{}) error {
+func (c *Client) patch(ctx context.Context, path string, body any, result any) error {
 	return c.doRequest(ctx, http.MethodPatch, path, nil, body, result)
 }
 
-func (c *Client) delete(ctx context.Context, path string, query url.Values) error {
+func (c *Client) del(ctx context.Context, path string, query url.Values) error {
 	return c.doRequest(ctx, http.MethodDelete, path, query, nil, nil)
 }
 
-func (c *Client) doRequest(ctx context.Context, method, path string, query url.Values, body interface{}, result interface{}) error {
+func (c *Client) doRequest(ctx context.Context, method, path string, query url.Values, body any, result any) error {
 	fullURL := c.endpoint + path
-	if query != nil && len(query) > 0 {
+	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
 	}
 
-	var bodyReader io.Reader
+	// Marshal body once, reuse for retries.
+	var bodyBytes []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return &LangSmithError{Message: "failed to marshal request body", Err: err}
 		}
-		bodyReader = bytes.NewReader(data)
 	}
 
 	var lastErr error
@@ -128,11 +136,11 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 				return ctx.Err()
 			case <-time.After(backoff):
 			}
-			// Reset body reader for retry.
-			if body != nil {
-				data, _ := json.Marshal(body)
-				bodyReader = bytes.NewReader(data)
-			}
+		}
+
+		var bodyReader io.Reader
+		if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
 		}
 
 		req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
@@ -140,7 +148,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 			return &LangSmithError{Message: "failed to create request", Err: err}
 		}
 		req.Header.Set("X-API-Key", c.apiKey)
-		if body != nil {
+		if bodyBytes != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Accept", "application/json")
@@ -189,8 +197,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 }
 
 // submitBatch submits a run to the background batch worker.
-func (c *Client) submitBatch(action string, payload interface{}) {
-	c.batch.Submit(internal.BatchItem{
+// Returns false if the queue is full or the worker has been closed.
+func (c *Client) submitBatch(action string, payload any) bool {
+	return c.batch.Submit(internal.BatchItem{
 		Action:     action,
 		RunPayload: payload,
 	})

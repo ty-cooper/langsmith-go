@@ -2,12 +2,13 @@ package internal
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,8 +17,12 @@ type BatchItem struct {
 	// Action is either "post" (create) or "patch" (update).
 	Action string
 	// RunPayload is the JSON-serializable run data.
-	RunPayload interface{}
+	RunPayload any
 }
+
+// OnFlushErrorFunc is called when a batch flush fails.
+// The error and the number of items that were lost are provided.
+type OnFlushErrorFunc func(err error, itemCount int)
 
 // BatchWorker handles background batching and ingestion of runs.
 type BatchWorker struct {
@@ -27,9 +32,12 @@ type BatchWorker struct {
 	queue      chan BatchItem
 	maxSize    int
 	interval   time.Duration
-	wg         sync.WaitGroup
-	cancel     context.CancelFunc
-	ctx        context.Context
+	onError    OnFlushErrorFunc
+	logger     *slog.Logger
+
+	closed atomic.Bool
+	wg     sync.WaitGroup
+	done   chan struct{}
 }
 
 // BatchWorkerConfig holds configuration for the batch worker.
@@ -40,9 +48,15 @@ type BatchWorkerConfig struct {
 	QueueSize  int
 	BatchSize  int
 	Interval   time.Duration
+	OnError    OnFlushErrorFunc
+	Logger     *slog.Logger
 }
 
 // NewBatchWorker creates and starts a new background batch worker.
+//
+// The worker runs a single goroutine that collects items from the queue
+// and flushes them in batches. Call Close to stop the worker and flush
+// remaining items.
 func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 1000
@@ -56,8 +70,10 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	w := &BatchWorker{
 		apiURL:     cfg.APIURL,
 		apiKey:     cfg.APIKey,
@@ -65,31 +81,42 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 		queue:      make(chan BatchItem, cfg.QueueSize),
 		maxSize:    cfg.BatchSize,
 		interval:   cfg.Interval,
-		cancel:     cancel,
-		ctx:        ctx,
+		onError:    cfg.OnError,
+		logger:     cfg.Logger,
+		done:       make(chan struct{}),
 	}
+
 	w.wg.Add(1)
 	go w.run()
 	return w
 }
 
-// Submit adds an item to the batch queue. Non-blocking; drops if queue is full.
-func (w *BatchWorker) Submit(item BatchItem) {
+// Submit adds an item to the batch queue. Non-blocking.
+// Returns false if the worker is closed or the queue is full.
+func (w *BatchWorker) Submit(item BatchItem) bool {
+	if w.closed.Load() {
+		return false
+	}
 	select {
 	case w.queue <- item:
+		return true
 	default:
-		// Queue full — drop silently to avoid blocking the caller.
+		return false
 	}
 }
 
-// Close stops the worker and flushes remaining items.
+// Close signals the worker to stop, then blocks until all queued items
+// are flushed. Safe to call multiple times.
 func (w *BatchWorker) Close() {
-	w.cancel()
+	if w.closed.CompareAndSwap(false, true) {
+		close(w.done)
+	}
 	w.wg.Wait()
 }
 
 func (w *BatchWorker) run() {
 	defer w.wg.Done()
+
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
@@ -108,16 +135,19 @@ func (w *BatchWorker) run() {
 				w.flush(batch)
 				batch = nil
 			}
-		case <-w.ctx.Done():
-			// Drain remaining items from queue.
-			close(w.queue)
-			for item := range w.queue {
-				batch = append(batch, item)
+		case <-w.done:
+			// Drain remaining items from queue without closing the channel.
+			for {
+				select {
+				case item := <-w.queue:
+					batch = append(batch, item)
+				default:
+					if len(batch) > 0 {
+						w.flush(batch)
+					}
+					return
+				}
 			}
-			if len(batch) > 0 {
-				w.flush(batch)
-			}
-			return
 		}
 	}
 }
@@ -127,8 +157,8 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 		return
 	}
 
-	var posts []interface{}
-	var patches []interface{}
+	var posts []any
+	var patches []any
 	for _, item := range batch {
 		switch item.Action {
 		case "post":
@@ -138,7 +168,7 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 		}
 	}
 
-	payload := map[string]interface{}{}
+	payload := map[string]any{}
 	if len(posts) > 0 {
 		payload["post"] = posts
 	}
@@ -148,12 +178,14 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
+		w.reportError(fmt.Errorf("batch flush: marshal payload: %w", err), len(batch))
 		return
 	}
 
 	url := fmt.Sprintf("%s/runs/batch", w.apiURL)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
+		w.reportError(fmt.Errorf("batch flush: create request: %w", err), len(batch))
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -161,8 +193,24 @@ func (w *BatchWorker) flush(batch []BatchItem) {
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
+		w.reportError(fmt.Errorf("batch flush: http request: %w", err), len(batch))
 		return
 	}
+	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		w.reportError(fmt.Errorf("batch flush: unexpected status %d", resp.StatusCode), len(batch))
+	}
+}
+
+func (w *BatchWorker) reportError(err error, itemCount int) {
+	if w.onError != nil {
+		w.onError(err, itemCount)
+		return
+	}
+	w.logger.Error("langsmith batch flush failed",
+		"error", err,
+		"items_lost", itemCount,
+	)
 }

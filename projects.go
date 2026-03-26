@@ -26,6 +26,7 @@ func (c *Client) ReadProject(ctx context.Context, projectID string) (*TracerSess
 }
 
 // ReadProjectByName retrieves a project by name.
+// Returns ErrNotFound if no project matches.
 func (c *Client) ReadProjectByName(ctx context.Context, name string) (*TracerSession, error) {
 	q := url.Values{}
 	q.Set("name", name)
@@ -34,7 +35,7 @@ func (c *Client) ReadProjectByName(ctx context.Context, name string) (*TracerSes
 		return nil, err
 	}
 	if len(results) == 0 {
-		return nil, &APIError{StatusCode: 404, Message: fmt.Sprintf("project %q not found", name)}
+		return nil, fmt.Errorf("project %q: %w", name, ErrNotFound)
 	}
 	return &results[0], nil
 }
@@ -63,14 +64,6 @@ func (c *Client) ListProjects(ctx context.Context, opts *ListProjectsOptions) ([
 	return results, nil
 }
 
-// ListProjectsOptions contains options for listing projects.
-type ListProjectsOptions struct {
-	Name               *string `json:"name,omitempty"`
-	ReferenceDatasetID *string `json:"reference_dataset_id,omitempty"`
-	Limit              *int    `json:"limit,omitempty"`
-	Offset             int     `json:"offset,omitempty"`
-}
-
 // UpdateProject updates a project.
 func (c *Client) UpdateProject(ctx context.Context, projectID string, update TracerSessionUpdate) (*TracerSession, error) {
 	var result TracerSession
@@ -82,7 +75,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, update Tra
 
 // DeleteProject deletes a project by ID.
 func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
-	return c.delete(ctx, fmt.Sprintf("/sessions/%s", projectID), nil)
+	return c.del(ctx, fmt.Sprintf("/sessions/%s", projectID), nil)
 }
 
 // DeleteProjectByName deletes a project by name.

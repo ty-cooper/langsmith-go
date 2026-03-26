@@ -7,7 +7,6 @@ import (
 	"time"
 
 	langsmith "github.com/tcoooper/langsmith-go"
-	"github.com/tcoooper/langsmith-go/internal"
 )
 
 // EvaluateOptions configures an evaluation run.
@@ -19,7 +18,7 @@ type EvaluateOptions struct {
 	// ExperimentPrefix is prepended to the experiment name.
 	ExperimentPrefix string
 	// Metadata is attached to the experiment.
-	Metadata map[string]interface{}
+	Metadata map[string]any
 	// MaxConcurrency limits parallel target invocations. Default is 5.
 	MaxConcurrency int
 	// Description for the experiment.
@@ -35,25 +34,21 @@ func Evaluate(
 	target TargetFunc,
 	opts EvaluateOptions,
 ) (*ExperimentResults, error) {
-	// Fetch dataset info.
 	dataset, err := client.ReadDataset(ctx, datasetID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read dataset: %w", err)
+		return nil, fmt.Errorf("evaluate: read dataset: %w", err)
 	}
 
-	// Fetch all examples.
 	examples, err := client.ListExamples(ctx, langsmith.ListExamplesOptions{
 		DatasetID: &datasetID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list examples: %w", err)
+		return nil, fmt.Errorf("evaluate: list examples: %w", err)
 	}
-
 	if len(examples) == 0 {
-		return nil, fmt.Errorf("dataset %q has no examples", dataset.Name)
+		return nil, fmt.Errorf("evaluate: dataset %q has no examples", dataset.Name)
 	}
 
-	// Create experiment project.
 	experimentName := fmt.Sprintf("%s-%d", dataset.Name, time.Now().Unix())
 	if opts.ExperimentPrefix != "" {
 		experimentName = fmt.Sprintf("%s-%s-%d", opts.ExperimentPrefix, dataset.Name, time.Now().Unix())
@@ -62,15 +57,12 @@ func Evaluate(
 	project, err := client.CreateProject(ctx, langsmith.TracerSessionCreate{
 		Name:               experimentName,
 		ReferenceDatasetID: &datasetID,
-		Extra: map[string]interface{}{
-			"metadata": opts.Metadata,
-		},
+		Extra:              map[string]any{"metadata": opts.Metadata},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create experiment project: %w", err)
+		return nil, fmt.Errorf("evaluate: create experiment project: %w", err)
 	}
 
-	// Run target on all examples with concurrency control.
 	maxConc := opts.MaxConcurrency
 	if maxConc <= 0 {
 		maxConc = 5
@@ -104,7 +96,7 @@ func Evaluate(
 			}
 
 			run := langsmith.RunCreate{
-				ID:                 internal.UUID7(),
+				ID:                 langsmith.NewID(),
 				Name:               "evaluation",
 				RunType:            langsmith.RunTypeChain,
 				StartTime:          startTime,
@@ -131,7 +123,6 @@ func Evaluate(
 	}
 	wg.Wait()
 
-	// Run evaluators on each result.
 	var experimentRows []ExperimentResultRow
 	for _, res := range results {
 		if res.err != nil {
@@ -140,12 +131,11 @@ func Evaluate(
 
 		var evalResults []EvaluationResult
 		for _, evaluator := range opts.Evaluators {
-			evalResult, err := evaluator.EvaluateRun(res.run, &res.example)
-			if err != nil {
+			evalResult, evalErr := evaluator.EvaluateRun(res.run, &res.example)
+			if evalErr != nil {
 				continue
 			}
 			if evalResult != nil {
-				// Submit feedback.
 				_, _ = client.CreateFeedback(ctx, langsmith.FeedbackCreate{
 					RunID:   &res.run.ID,
 					Key:     evalResult.Key,
@@ -164,14 +154,10 @@ func Evaluate(
 		})
 	}
 
-	// Run summary evaluators.
 	if len(opts.SummaryEvaluators) > 0 {
 		var runExamples []RunExample
 		for _, row := range experimentRows {
-			runExamples = append(runExamples, RunExample{
-				Run:     row.Run,
-				Example: row.Example,
-			})
+			runExamples = append(runExamples, RunExample{Run: row.Run, Example: row.Example})
 		}
 		for _, summaryEval := range opts.SummaryEvaluators {
 			_, _ = summaryEval.EvaluateSummary(runExamples)
@@ -196,36 +182,33 @@ func EvaluateExisting(
 	projectName string,
 	opts EvaluateOptions,
 ) (*ExperimentResults, error) {
-	// Find the project.
 	project, err := client.ReadProjectByName(ctx, projectName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find project %q: %w", projectName, err)
+		return nil, fmt.Errorf("evaluate existing: find project %q: %w", projectName, err)
 	}
 
-	// Get runs from the project.
 	runs, err := client.ListRuns(ctx, langsmith.ListRunsOptions{
 		ProjectID: &project.ID,
 		IsRoot:    langsmith.BoolPtr(true),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list runs: %w", err)
+		return nil, fmt.Errorf("evaluate existing: list runs: %w", err)
 	}
 
-	// Build results.
 	var experimentRows []ExperimentResultRow
 	for _, run := range runs {
 		var example *langsmith.Example
 		if run.ReferenceExampleID != nil {
-			ex, err := client.ReadExample(ctx, *run.ReferenceExampleID)
-			if err == nil {
+			ex, readErr := client.ReadExample(ctx, *run.ReferenceExampleID)
+			if readErr == nil {
 				example = ex
 			}
 		}
 
 		var evalResults []EvaluationResult
 		for _, evaluator := range opts.Evaluators {
-			evalResult, err := evaluator.EvaluateRun(run, example)
-			if err != nil {
+			evalResult, evalErr := evaluator.EvaluateRun(run, example)
+			if evalErr != nil {
 				continue
 			}
 			if evalResult != nil {
@@ -258,4 +241,3 @@ func EvaluateExisting(
 		Metadata:       opts.Metadata,
 	}, nil
 }
-

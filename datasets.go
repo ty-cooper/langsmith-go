@@ -3,6 +3,7 @@ package langsmith
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -30,6 +31,7 @@ func (c *Client) ReadDataset(ctx context.Context, datasetID string) (*Dataset, e
 }
 
 // ReadDatasetByName retrieves a dataset by name.
+// Returns ErrNotFound if no dataset matches.
 func (c *Client) ReadDatasetByName(ctx context.Context, name string) (*Dataset, error) {
 	q := url.Values{}
 	q.Set("name", name)
@@ -38,7 +40,7 @@ func (c *Client) ReadDatasetByName(ctx context.Context, name string) (*Dataset, 
 		return nil, err
 	}
 	if len(results) == 0 {
-		return nil, &APIError{StatusCode: 404, Message: fmt.Sprintf("dataset %q not found", name)}
+		return nil, fmt.Errorf("dataset %q: %w", name, ErrNotFound)
 	}
 	return &results[0], nil
 }
@@ -67,15 +69,6 @@ func (c *Client) ListDatasets(ctx context.Context, opts *ListDatasetsOptions) ([
 	return results, nil
 }
 
-// ListDatasetsOptions contains options for listing datasets.
-type ListDatasetsOptions struct {
-	Name     *string   `json:"name,omitempty"`
-	DataType *DataType `json:"data_type,omitempty"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
-	Limit    *int      `json:"limit,omitempty"`
-	Offset   int       `json:"offset,omitempty"`
-}
-
 // UpdateDataset updates a dataset.
 func (c *Client) UpdateDataset(ctx context.Context, datasetID string, update DatasetUpdate) (*Dataset, error) {
 	var result Dataset
@@ -87,7 +80,7 @@ func (c *Client) UpdateDataset(ctx context.Context, datasetID string, update Dat
 
 // DeleteDataset deletes a dataset by ID.
 func (c *Client) DeleteDataset(ctx context.Context, datasetID string) error {
-	return c.delete(ctx, fmt.Sprintf("/datasets/%s", datasetID), nil)
+	return c.del(ctx, fmt.Sprintf("/datasets/%s", datasetID), nil)
 }
 
 // CloneDataset clones a dataset with a new name.
@@ -108,71 +101,74 @@ func (c *Client) UploadCSV(ctx context.Context, datasetName string, csvData []by
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	_ = writer.WriteField("name", datasetName)
+	if err := writer.WriteField("name", datasetName); err != nil {
+		return nil, fmt.Errorf("upload csv: write name field: %w", err)
+	}
 	if opts != nil {
-		if opts.Description != "" {
-			_ = writer.WriteField("description", opts.Description)
-		}
-		if opts.InputKeys != nil {
-			for _, k := range opts.InputKeys {
-				_ = writer.WriteField("input_keys", k)
+		if opts.Description != nil {
+			if err := writer.WriteField("description", *opts.Description); err != nil {
+				return nil, fmt.Errorf("upload csv: write description field: %w", err)
 			}
 		}
-		if opts.OutputKeys != nil {
-			for _, k := range opts.OutputKeys {
-				_ = writer.WriteField("output_keys", k)
+		for _, k := range opts.InputKeys {
+			if err := writer.WriteField("input_keys", k); err != nil {
+				return nil, fmt.Errorf("upload csv: write input_keys field: %w", err)
+			}
+		}
+		for _, k := range opts.OutputKeys {
+			if err := writer.WriteField("output_keys", k); err != nil {
+				return nil, fmt.Errorf("upload csv: write output_keys field: %w", err)
 			}
 		}
 	}
 
 	part, err := writer.CreateFormFile("file", "data.csv")
 	if err != nil {
-		return nil, &LangSmithError{Message: "failed to create form file", Err: err}
+		return nil, fmt.Errorf("upload csv: create form file: %w", err)
 	}
 	if _, err := part.Write(csvData); err != nil {
-		return nil, &LangSmithError{Message: "failed to write CSV data", Err: err}
+		return nil, fmt.Errorf("upload csv: write csv data: %w", err)
 	}
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("upload csv: close multipart writer: %w", err)
+	}
 
 	fullURL := c.endpoint + "/datasets/upload"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, &buf)
 	if err != nil {
-		return nil, &LangSmithError{Message: "failed to create request", Err: err}
+		return nil, fmt.Errorf("upload csv: create request: %w", err)
 	}
 	req.Header.Set("X-API-Key", c.apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &LangSmithError{Message: "upload request failed", Err: err}
+		return nil, fmt.Errorf("upload csv: http request: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("upload csv: read response: %w", err)
+	}
 
 	if resp.StatusCode >= 300 {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	var result Dataset
-	if err := decodeJSON(respBody, &result); err != nil {
-		return nil, err
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("upload csv: decode response: %w", err)
 	}
 	return &result, nil
 }
 
-// UploadCSVOptions contains options for uploading a CSV.
-type UploadCSVOptions struct {
-	Description string
-	InputKeys   []string
-	OutputKeys  []string
-}
-
 // DatasetDiff returns the diff between two versions of a dataset.
-func (c *Client) DatasetDiff(ctx context.Context, datasetID string, fromVersion, toVersion string) (map[string]interface{}, error) {
+func (c *Client) DatasetDiff(ctx context.Context, datasetID string, fromVersion, toVersion string) (map[string]any, error) {
 	q := url.Values{}
 	q.Set("from_version", fromVersion)
 	q.Set("to_version", toVersion)
-	var result map[string]interface{}
+	var result map[string]any
 	if err := c.get(ctx, fmt.Sprintf("/datasets/%s/diff", datasetID), q, &result); err != nil {
 		return nil, err
 	}

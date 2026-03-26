@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 )
 
 // CreateRun creates a new run in LangSmith.
@@ -20,11 +19,13 @@ func (c *Client) CreateRun(ctx context.Context, run RunCreate) (*Run, error) {
 }
 
 // CreateRunBatched submits a run creation to the background batch worker.
-func (c *Client) CreateRunBatched(run RunCreate) {
+// Returns false if the queue is full or the worker has been closed,
+// in which case the item is dropped.
+func (c *Client) CreateRunBatched(run RunCreate) bool {
 	if run.SessionName == "" && run.SessionID == nil {
 		run.SessionName = c.project
 	}
-	c.submitBatch("post", run)
+	return c.submitBatch("post", run)
 }
 
 // UpdateRun updates an existing run.
@@ -33,7 +34,9 @@ func (c *Client) UpdateRun(ctx context.Context, runID string, update RunUpdate) 
 }
 
 // UpdateRunBatched submits a run update to the background batch worker.
-func (c *Client) UpdateRunBatched(runID string, update RunUpdate) {
+// Returns false if the queue is full or the worker has been closed,
+// in which case the item is dropped.
+func (c *Client) UpdateRunBatched(runID string, update RunUpdate) bool {
 	payload := struct {
 		RunUpdate
 		ID string `json:"id"`
@@ -41,7 +44,7 @@ func (c *Client) UpdateRunBatched(runID string, update RunUpdate) {
 		RunUpdate: update,
 		ID:        runID,
 	}
-	c.submitBatch("patch", payload)
+	return c.submitBatch("patch", payload)
 }
 
 // ReadRun retrieves a single run by ID.
@@ -75,14 +78,13 @@ func (c *Client) GetRunURL(runID string, opts ...GetRunURLOption) string {
 	}
 
 	baseURL := c.endpoint
-	// Convert API URL to app URL
+	// Convert API URL to app URL.
 	if baseURL == "https://api.smith.langchain.com" {
 		baseURL = "https://smith.langchain.com"
 	}
 
-	q := url.Values{}
 	if cfg.projectID != "" {
-		return fmt.Sprintf("%s/o/default/projects/p/%s/r/%s?%s", baseURL, cfg.projectID, runID, q.Encode())
+		return fmt.Sprintf("%s/o/default/projects/p/%s/r/%s", baseURL, cfg.projectID, runID)
 	}
 	return fmt.Sprintf("%s/o/default/r/%s", baseURL, runID)
 }
@@ -96,14 +98,12 @@ type GetRunURLOption func(*getRunURLConfig)
 
 // WithRunURLProjectID sets the project ID for the run URL.
 func WithRunURLProjectID(id string) GetRunURLOption {
-	return func(c *getRunURLConfig) {
-		c.projectID = id
-	}
+	return func(c *getRunURLConfig) { c.projectID = id }
 }
 
 // DeleteRun deletes a run by ID.
 func (c *Client) DeleteRun(ctx context.Context, runID string) error {
-	return c.delete(ctx, fmt.Sprintf("/runs/%s", runID), nil)
+	return c.del(ctx, fmt.Sprintf("/runs/%s", runID), nil)
 }
 
 // ShareRun creates a publicly accessible link for a run.
@@ -118,7 +118,7 @@ func (c *Client) ShareRun(ctx context.Context, runID string) (*SharedRunURL, err
 
 // UnshareRun removes the shared link for a run.
 func (c *Client) UnshareRun(ctx context.Context, runID string) error {
-	return c.delete(ctx, fmt.Sprintf("/runs/%s/share", runID), nil)
+	return c.del(ctx, fmt.Sprintf("/runs/%s/share", runID), nil)
 }
 
 // ReadRunSharedLink retrieves the shared link for a run.
@@ -134,7 +134,7 @@ func (c *Client) ReadRunSharedLink(ctx context.Context, runID string) (*SharedRu
 func (c *Client) RunIsShared(ctx context.Context, runID string) (bool, error) {
 	_, err := c.ReadRunSharedLink(ctx, runID)
 	if err != nil {
-		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 404 {
+		if IsNotFound(err) {
 			return false, nil
 		}
 		return false, err
@@ -143,26 +143,25 @@ func (c *Client) RunIsShared(ctx context.Context, runID string) (bool, error) {
 }
 
 // ListRunsIterator returns an iterator for paginating through runs.
-func (c *Client) ListRunsIterator(ctx context.Context, opts ListRunsOptions) *RunIterator {
+// Each call to Next uses the provided context for the underlying API call.
+func (c *Client) ListRunsIterator(opts ListRunsOptions) *RunIterator {
 	return &RunIterator{
 		client: c,
-		ctx:    ctx,
 		opts:   opts,
 	}
 }
 
 // RunIterator provides pagination over runs.
 type RunIterator struct {
-	client  *Client
-	ctx     context.Context
-	opts    ListRunsOptions
-	buffer  []Run
-	offset  int
-	done    bool
+	client *Client
+	opts   ListRunsOptions
+	buffer []Run
+	offset int
+	done   bool
 }
 
 // Next returns the next run. Returns nil, nil when iteration is complete.
-func (it *RunIterator) Next() (*Run, error) {
+func (it *RunIterator) Next(ctx context.Context) (*Run, error) {
 	if len(it.buffer) == 0 {
 		if it.done {
 			return nil, nil
@@ -171,7 +170,7 @@ func (it *RunIterator) Next() (*Run, error) {
 		if it.opts.Limit == nil {
 			it.opts.Limit = IntPtr(100)
 		}
-		runs, err := it.client.ListRuns(it.ctx, it.opts)
+		runs, err := it.client.ListRuns(ctx, it.opts)
 		if err != nil {
 			return nil, err
 		}
@@ -192,10 +191,10 @@ func (it *RunIterator) Next() (*Run, error) {
 }
 
 // All collects all remaining runs into a slice.
-func (it *RunIterator) All() ([]Run, error) {
+func (it *RunIterator) All(ctx context.Context) ([]Run, error) {
 	var all []Run
 	for {
-		run, err := it.Next()
+		run, err := it.Next(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -207,23 +206,8 @@ func (it *RunIterator) All() ([]Run, error) {
 	return all, nil
 }
 
-// buildRunQuery builds query parameters from ListRunsOptions for GET-style endpoints.
-func buildRunQuery(opts ListRunsOptions) url.Values {
-	q := url.Values{}
-	if opts.ProjectID != nil {
-		q.Set("project_id", *opts.ProjectID)
-	}
-	if opts.ProjectName != nil {
-		q.Set("project_name", *opts.ProjectName)
-	}
-	if opts.RunType != nil {
-		q.Set("run_type", string(*opts.RunType))
-	}
-	if opts.Limit != nil {
-		q.Set("limit", strconv.Itoa(*opts.Limit))
-	}
-	if opts.Offset > 0 {
-		q.Set("offset", strconv.Itoa(opts.Offset))
-	}
-	return q
+// --- URL helpers ---
+
+func pathJoin(base, id string) string {
+	return fmt.Sprintf("%s/%s", base, url.PathEscape(id))
 }

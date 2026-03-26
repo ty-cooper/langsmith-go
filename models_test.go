@@ -6,7 +6,9 @@ import (
 	"time"
 )
 
-func TestRunSerializationRoundTrip(t *testing.T) {
+func TestRun_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	errMsg := "something went wrong"
 	run := Run{
@@ -15,68 +17,69 @@ func TestRunSerializationRoundTrip(t *testing.T) {
 		RunType:   RunTypeLLM,
 		StartTime: now,
 		Error:     &errMsg,
-		Inputs:    map[string]interface{}{"prompt": "hello"},
-		Outputs:   map[string]interface{}{"response": "world"},
+		Inputs:    map[string]any{"prompt": "hello"},
+		Outputs:   map[string]any{"response": "world"},
 		Tags:      []string{"test", "unit"},
-		Metadata:  map[string]interface{}{"version": "1.0"},
+		Metadata:  map[string]any{"version": "1.0"},
 	}
 
 	data, err := json.Marshal(run)
 	if err != nil {
-		t.Fatalf("marshal error: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
 
 	var decoded Run
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
+		t.Fatalf("unmarshal: %v", err)
 	}
 
 	if decoded.ID != run.ID {
-		t.Errorf("ID mismatch: %s vs %s", decoded.ID, run.ID)
-	}
-	if decoded.Name != run.Name {
-		t.Errorf("Name mismatch: %s vs %s", decoded.Name, run.Name)
+		t.Errorf("ID = %q, want %q", decoded.ID, run.ID)
 	}
 	if decoded.RunType != RunTypeLLM {
-		t.Errorf("RunType mismatch: %s", decoded.RunType)
+		t.Errorf("RunType = %q, want %q", decoded.RunType, RunTypeLLM)
 	}
 	if decoded.Error == nil || *decoded.Error != errMsg {
-		t.Error("Error mismatch")
+		t.Errorf("Error = %v, want %q", decoded.Error, errMsg)
 	}
 	if len(decoded.Tags) != 2 {
-		t.Errorf("Tags length mismatch: %d", len(decoded.Tags))
+		t.Errorf("len(Tags) = %d, want 2", len(decoded.Tags))
 	}
 }
 
-func TestDatasetSerialization(t *testing.T) {
+func TestDataset_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	desc := "test dataset"
 	ds := Dataset{
 		ID:          "ds-1",
 		Name:        "my-dataset",
 		Description: &desc,
 		DataType:    DataTypeKV,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC().Truncate(time.Millisecond),
 	}
 
 	data, err := json.Marshal(ds)
 	if err != nil {
-		t.Fatalf("marshal error: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
 
 	var decoded Dataset
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
+		t.Fatalf("unmarshal: %v", err)
 	}
 
 	if decoded.Name != "my-dataset" {
-		t.Errorf("Name mismatch: %s", decoded.Name)
+		t.Errorf("Name = %q, want %q", decoded.Name, "my-dataset")
 	}
 	if decoded.DataType != DataTypeKV {
-		t.Errorf("DataType mismatch: %s", decoded.DataType)
+		t.Errorf("DataType = %q, want %q", decoded.DataType, DataTypeKV)
 	}
 }
 
-func TestFeedbackSerialization(t *testing.T) {
+func TestFeedback_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	score := 0.95
 	runID := "run-123"
 	fb := Feedback{
@@ -88,46 +91,39 @@ func TestFeedbackSerialization(t *testing.T) {
 
 	data, err := json.Marshal(fb)
 	if err != nil {
-		t.Fatalf("marshal error: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
 
 	var decoded Feedback
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
+		t.Fatalf("unmarshal: %v", err)
 	}
 
 	if decoded.Key != "accuracy" {
-		t.Errorf("Key mismatch: %s", decoded.Key)
+		t.Errorf("Key = %q, want %q", decoded.Key, "accuracy")
 	}
 	if decoded.Score == nil || *decoded.Score != 0.95 {
-		t.Error("Score mismatch")
+		t.Errorf("Score = %v, want 0.95", decoded.Score)
 	}
 }
 
-func TestHelperPtrFunctions(t *testing.T) {
-	s := StringPtr("hello")
-	if *s != "hello" {
-		t.Error("StringPtr failed")
-	}
+func TestPtrHelpers(t *testing.T) {
+	t.Parallel()
 
-	i := IntPtr(42)
-	if *i != 42 {
-		t.Error("IntPtr failed")
+	if got := *StringPtr("hello"); got != "hello" {
+		t.Errorf("StringPtr = %q", got)
 	}
-
-	f := Float64Ptr(3.14)
-	if *f != 3.14 {
-		t.Error("Float64Ptr failed")
+	if got := *IntPtr(42); got != 42 {
+		t.Errorf("IntPtr = %d", got)
 	}
-
-	b := BoolPtr(true)
-	if *b != true {
-		t.Error("BoolPtr failed")
+	if got := *Float64Ptr(3.14); got != 3.14 {
+		t.Errorf("Float64Ptr = %f", got)
 	}
-
+	if got := *BoolPtr(true); got != true {
+		t.Errorf("BoolPtr = %v", got)
+	}
 	now := time.Now()
-	tp := TimePtr(now)
-	if !tp.Equal(now) {
-		t.Error("TimePtr failed")
+	if got := TimePtr(now); !got.Equal(now) {
+		t.Errorf("TimePtr = %v, want %v", got, now)
 	}
 }

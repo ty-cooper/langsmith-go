@@ -3,6 +3,7 @@ package langsmith
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tcoooper/langsmith-go/internal"
@@ -11,20 +12,24 @@ import (
 // RunTree represents a hierarchical execution trace.
 // It manages parent-child relationships and can post/patch runs
 // to LangSmith via a background batch worker.
+//
+// RunTree is safe for concurrent use from multiple goroutines.
 type RunTree struct {
+	mu sync.Mutex
+
 	ID          string
 	Name        string
 	RunType     RunType
 	StartTime   time.Time
 	EndTime     *time.Time
-	Inputs      map[string]interface{}
-	Outputs     map[string]interface{}
+	Inputs      map[string]any
+	Outputs     map[string]any
 	Error       *string
 	Tags        []string
-	Metadata    map[string]interface{}
-	Events      []map[string]interface{}
-	Extra       map[string]interface{}
-	Serialized  map[string]interface{}
+	Metadata    map[string]any
+	Events      []map[string]any
+	Extra       map[string]any
+	Serialized  map[string]any
 	ParentRunID *string
 	TraceID     string
 	DottedOrder string
@@ -42,17 +47,17 @@ type RunTree struct {
 type RunTreeOption func(*RunTree)
 
 // WithRunTreeInputs sets the initial inputs.
-func WithRunTreeInputs(inputs map[string]interface{}) RunTreeOption {
+func WithRunTreeInputs(inputs map[string]any) RunTreeOption {
 	return func(rt *RunTree) { rt.Inputs = inputs }
 }
 
 // WithRunTreeOutputs sets the initial outputs.
-func WithRunTreeOutputs(outputs map[string]interface{}) RunTreeOption {
+func WithRunTreeOutputs(outputs map[string]any) RunTreeOption {
 	return func(rt *RunTree) { rt.Outputs = outputs }
 }
 
 // WithRunTreeMetadata sets metadata.
-func WithRunTreeMetadata(metadata map[string]interface{}) RunTreeOption {
+func WithRunTreeMetadata(metadata map[string]any) RunTreeOption {
 	return func(rt *RunTree) { rt.Metadata = metadata }
 }
 
@@ -62,7 +67,7 @@ func WithRunTreeTags(tags []string) RunTreeOption {
 }
 
 // WithRunTreeExtra sets extra data.
-func WithRunTreeExtra(extra map[string]interface{}) RunTreeOption {
+func WithRunTreeExtra(extra map[string]any) RunTreeOption {
 	return func(rt *RunTree) { rt.Extra = extra }
 }
 
@@ -91,7 +96,7 @@ func NewRunTree(name string, runType RunType, opts ...RunTreeOption) *RunTree {
 		Name:      name,
 		RunType:   runType,
 		StartTime: now,
-		Metadata:  make(map[string]interface{}),
+		Metadata:  make(map[string]any),
 	}
 
 	for _, opt := range opts {
@@ -112,7 +117,11 @@ func NewRunTree(name string, runType RunType, opts ...RunTreeOption) *RunTree {
 }
 
 // CreateChild creates a child RunTree under this parent.
+// Safe for concurrent use.
 func (rt *RunTree) CreateChild(name string, runType RunType, opts ...RunTreeOption) *RunTree {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
 	id := internal.UUID7()
 	now := time.Now().UTC()
 
@@ -126,7 +135,7 @@ func (rt *RunTree) CreateChild(name string, runType RunType, opts ...RunTreeOpti
 		DottedOrder: internal.AppendDottedOrder(rt.DottedOrder, now, id),
 		SessionName: rt.SessionName,
 		SessionID:   rt.SessionID,
-		Metadata:    make(map[string]interface{}),
+		Metadata:    make(map[string]any),
 		client:      rt.client,
 	}
 
@@ -140,12 +149,13 @@ func (rt *RunTree) CreateChild(name string, runType RunType, opts ...RunTreeOpti
 
 // End finalizes the run with outputs and/or an error, then patches it.
 func (rt *RunTree) End(opts ...EndOption) {
+	rt.mu.Lock()
 	now := time.Now().UTC()
 	rt.EndTime = &now
-
 	for _, opt := range opts {
 		opt(rt)
 	}
+	rt.mu.Unlock()
 
 	rt.PatchRun()
 }
@@ -154,7 +164,7 @@ func (rt *RunTree) End(opts ...EndOption) {
 type EndOption func(*RunTree)
 
 // WithEndOutputs sets the outputs when ending.
-func WithEndOutputs(outputs map[string]interface{}) EndOption {
+func WithEndOutputs(outputs map[string]any) EndOption {
 	return func(rt *RunTree) { rt.Outputs = outputs }
 }
 
@@ -164,15 +174,25 @@ func WithEndError(err string) EndOption {
 }
 
 // SetInputs sets the inputs on the run.
-func (rt *RunTree) SetInputs(inputs map[string]interface{}) { rt.Inputs = inputs }
+func (rt *RunTree) SetInputs(inputs map[string]any) {
+	rt.mu.Lock()
+	rt.Inputs = inputs
+	rt.mu.Unlock()
+}
 
 // SetOutputs sets the outputs on the run.
-func (rt *RunTree) SetOutputs(outputs map[string]interface{}) { rt.Outputs = outputs }
+func (rt *RunTree) SetOutputs(outputs map[string]any) {
+	rt.mu.Lock()
+	rt.Outputs = outputs
+	rt.mu.Unlock()
+}
 
 // AddMetadata adds key-value pairs to the run metadata.
-func (rt *RunTree) AddMetadata(kv map[string]interface{}) {
+func (rt *RunTree) AddMetadata(kv map[string]any) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
 	if rt.Metadata == nil {
-		rt.Metadata = make(map[string]interface{})
+		rt.Metadata = make(map[string]any)
 	}
 	for k, v := range kv {
 		rt.Metadata[k] = v
@@ -181,22 +201,64 @@ func (rt *RunTree) AddMetadata(kv map[string]interface{}) {
 
 // AddTags appends tags to the run.
 func (rt *RunTree) AddTags(tags ...string) {
+	rt.mu.Lock()
 	rt.Tags = append(rt.Tags, tags...)
+	rt.mu.Unlock()
 }
 
 // AddEvent appends an event to the run.
-func (rt *RunTree) AddEvent(event map[string]interface{}) {
+func (rt *RunTree) AddEvent(event map[string]any) {
+	rt.mu.Lock()
 	rt.Events = append(rt.Events, event)
+	rt.mu.Unlock()
 }
 
 // PostRun submits the run creation to the batch worker.
 func (rt *RunTree) PostRun() {
+	rt.mu.Lock()
 	if rt.client == nil || rt.posted {
+		rt.mu.Unlock()
 		return
 	}
 	rt.posted = true
+	create := rt.buildCreateLocked()
+	rt.mu.Unlock()
 
-	create := RunCreate{
+	rt.client.CreateRunBatched(create)
+}
+
+// PatchRun submits a run update to the batch worker.
+func (rt *RunTree) PatchRun() {
+	rt.mu.Lock()
+	if rt.client == nil {
+		rt.mu.Unlock()
+		return
+	}
+	if !rt.posted {
+		rt.posted = true
+		create := rt.buildCreateLocked()
+		rt.mu.Unlock()
+		rt.client.CreateRunBatched(create)
+		return
+	}
+	update := rt.buildUpdateLocked()
+	id := rt.ID
+	rt.mu.Unlock()
+
+	rt.client.UpdateRunBatched(id, update)
+}
+
+// Children returns a copy of the child run trees.
+func (rt *RunTree) Children() []*RunTree {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	out := make([]*RunTree, len(rt.children))
+	copy(out, rt.children)
+	return out
+}
+
+func (rt *RunTree) buildCreateLocked() RunCreate {
+	return RunCreate{
 		ID:                 rt.ID,
 		Name:               rt.Name,
 		RunType:            rt.RunType,
@@ -218,20 +280,10 @@ func (rt *RunTree) PostRun() {
 		Extra:              rt.Extra,
 		Attachments:        rt.Attachments,
 	}
-	rt.client.CreateRunBatched(create)
 }
 
-// PatchRun submits a run update to the batch worker.
-func (rt *RunTree) PatchRun() {
-	if rt.client == nil {
-		return
-	}
-	if !rt.posted {
-		rt.PostRun()
-		return
-	}
-
-	update := RunUpdate{
+func (rt *RunTree) buildUpdateLocked() RunUpdate {
+	return RunUpdate{
 		EndTime:  rt.EndTime,
 		Error:    rt.Error,
 		Outputs:  rt.Outputs,
@@ -240,12 +292,6 @@ func (rt *RunTree) PatchRun() {
 		Metadata: rt.Metadata,
 		Extra:    rt.Extra,
 	}
-	rt.client.UpdateRunBatched(rt.ID, update)
-}
-
-// Children returns the child run trees.
-func (rt *RunTree) Children() []*RunTree {
-	return rt.children
 }
 
 // --- Header Serialization ---
@@ -260,12 +306,16 @@ const (
 
 // ToHeaders serializes the RunTree trace context into HTTP headers.
 func (rt *RunTree) ToHeaders() http.Header {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
 	h := http.Header{}
 	h.Set(HeaderParentID, rt.ID)
 
-	var parts []string
-	parts = append(parts, "langsmith-trace_id="+rt.TraceID)
-	parts = append(parts, "langsmith-dotted_order="+rt.DottedOrder)
+	parts := []string{
+		"langsmith-trace_id=" + rt.TraceID,
+		"langsmith-dotted_order=" + rt.DottedOrder,
+	}
 	if rt.SessionName != "" {
 		parts = append(parts, "langsmith-session_name="+rt.SessionName)
 	}
