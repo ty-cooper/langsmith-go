@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tcoooper/langsmith-go/internal"
+	"github.com/ty-cooper/langsmith-go/internal"
 )
 
 // Client is the main LangSmith API client.

@@ -1,6 +1,6 @@
 # LangSmith Go SDK
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/tcoooper/langsmith-go.svg)](https://pkg.go.dev/github.com/tcoooper/langsmith-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ty-cooper/langsmith-go.svg)](https://pkg.go.dev/github.com/ty-cooper/langsmith-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 This package provides a Go client for [LangSmith](https://smith.langchain.com/) — a platform for debugging, testing, evaluating, and monitoring LLM applications.
@@ -8,7 +8,7 @@ This package provides a Go client for [LangSmith](https://smith.langchain.com/) 
 ## Installation
 
 ```bash
-go get github.com/tcoooper/langsmith-go
+go get github.com/ty-cooper/langsmith-go
 ```
 
 **Requirements:** Go 1.22+
@@ -32,7 +32,7 @@ import (
     "fmt"
     "log"
 
-    langsmith "github.com/tcoooper/langsmith-go"
+    langsmith "github.com/ty-cooper/langsmith-go"
 )
 
 func main() {
@@ -219,8 +219,8 @@ Run your application against a dataset and score the results with evaluators:
 
 ```go
 import (
-    langsmith "github.com/tcoooper/langsmith-go"
-    "github.com/tcoooper/langsmith-go/evaluation"
+    langsmith "github.com/ty-cooper/langsmith-go"
+    "github.com/ty-cooper/langsmith-go/evaluation"
 )
 
 results, err := evaluation.Evaluate(ctx, client, dataset.ID,
@@ -413,7 +413,7 @@ defer client.Close() // flushes remaining items
 
 - [LangSmith Documentation](https://docs.smith.langchain.com/)
 - [LangSmith Python SDK](https://github.com/langchain-ai/langsmith-sdk) (reference implementation)
-- [Go Package Documentation](https://pkg.go.dev/github.com/tcoooper/langsmith-go)
+- [Go Package Documentation](https://pkg.go.dev/github.com/ty-cooper/langsmith-go)
 
 ## License
 

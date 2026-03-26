@@ -1,7 +1,7 @@
 package evaluation
 
 import (
-	langsmith "github.com/tcoooper/langsmith-go"
+	langsmith "github.com/ty-cooper/langsmith-go"
 )
 
 // RunEvaluator evaluates a run against its reference example.

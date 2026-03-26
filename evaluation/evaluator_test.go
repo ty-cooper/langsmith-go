@@ -3,7 +3,7 @@ package evaluation
 import (
 	"testing"
 
-	langsmith "github.com/tcoooper/langsmith-go"
+	langsmith "github.com/ty-cooper/langsmith-go"
 )
 
 func TestExactMatch_MatchingStrings_ReturnsScore1(t *testing.T) {

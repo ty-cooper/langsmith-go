@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tcoooper/langsmith-go/internal"
+	"github.com/ty-cooper/langsmith-go/internal"
 )
 
 // RunTree represents a hierarchical execution trace.

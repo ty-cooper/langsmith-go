@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tcoooper/langsmith-go/internal"
+	"github.com/ty-cooper/langsmith-go/internal"
 )
 
 // ClientOption configures the Client.

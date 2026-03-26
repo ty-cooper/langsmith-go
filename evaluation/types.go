@@ -3,7 +3,7 @@ package evaluation
 import (
 	"time"
 
-	langsmith "github.com/tcoooper/langsmith-go"
+	langsmith "github.com/ty-cooper/langsmith-go"
 )
 
 // EvaluationResult represents the result of a single evaluator on a single example.

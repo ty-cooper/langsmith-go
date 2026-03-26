@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	langsmith "github.com/tcoooper/langsmith-go"
+	langsmith "github.com/ty-cooper/langsmith-go"
 )
 
 // EvaluateOptions configures an evaluation run.
