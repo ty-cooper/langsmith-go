@@ -37,17 +37,19 @@ func (c *Client) UpdateRun(ctx context.Context, runID string, update RunUpdate) 
 // traceID and dottedOrder are required by the batch API for patch operations.
 // Returns false if the queue is full or the worker has been closed,
 // in which case the item is dropped.
-func (c *Client) UpdateRunBatched(runID, traceID, dottedOrder string, update RunUpdate) bool {
+func (c *Client) UpdateRunBatched(runID, traceID, dottedOrder string, parentRunID *string, update RunUpdate) bool {
 	payload := struct {
 		RunUpdate
-		ID          string `json:"id"`
-		TraceID     string `json:"trace_id"`
-		DottedOrder string `json:"dotted_order"`
+		ID          string  `json:"id"`
+		TraceID     string  `json:"trace_id"`
+		DottedOrder string  `json:"dotted_order"`
+		ParentRunID *string `json:"parent_run_id,omitempty"`
 	}{
 		RunUpdate:   update,
 		ID:          runID,
 		TraceID:     traceID,
 		DottedOrder: dottedOrder,
+		ParentRunID: parentRunID,
 	}
 	return c.submitBatch("patch", payload)
 }
