@@ -14,6 +14,23 @@ import (
 // uuidPattern matches UUID v4/v7 format strings.
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// dottedOrderSegment matches a single dotted-order segment: YYYYMMDDTHHMMSSffffffZ<uuid>.
+var dottedOrderSegment = regexp.MustCompile(`^\d{8}T\d{6}\d{6}Z[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// isValidDottedOrder checks that s is a well-formed dotted order string
+// consisting of one or more dot-separated segments.
+func isValidDottedOrder(s string) bool {
+	if s == "" || len(s) > 1024 {
+		return false
+	}
+	for _, seg := range strings.Split(s, ".") {
+		if !dottedOrderSegment.MatchString(seg) {
+			return false
+		}
+	}
+	return true
+}
+
 // RunTree represents a hierarchical execution trace.
 // It manages parent-child relationships and can post/patch runs
 // to LangSmith via a background batch worker.
@@ -415,7 +432,9 @@ func RunTreeFromHeaders(headers http.Header, client *Client) *RunTree {
 					rt.TraceID = val
 				}
 			case "langsmith-dotted_order":
-				rt.DottedOrder = val
+				if isValidDottedOrder(val) {
+					rt.DottedOrder = val
+				}
 			case "langsmith-session_name":
 				rt.SessionName = val
 			case "langsmith-session_id":

@@ -260,7 +260,7 @@ func (w *BatchWorker) doFlush(body []byte) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &flushError{statusCode: resp.StatusCode, body: string(respBody)}
 	}
 	io.Copy(io.Discard, resp.Body)

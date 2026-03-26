@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // GetPrompt retrieves a prompt by name (format: "owner/repo" or just "repo").
 func (c *Client) GetPrompt(ctx context.Context, promptIdentifier string) (*Prompt, error) {
 	var result Prompt
-	if err := c.get(ctx, fmt.Sprintf("/repos/%s", promptIdentifier), nil, &result); err != nil {
+	if err := c.get(ctx, fmt.Sprintf("/repos/%s", escapeRepoHandle(promptIdentifier)), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -65,7 +66,7 @@ func (c *Client) CreatePrompt(ctx context.Context, req CreatePromptRequest) (*Pr
 // UpdatePrompt updates an existing prompt repo.
 func (c *Client) UpdatePrompt(ctx context.Context, repoHandle string, opts UpdatePromptOptions) (*Prompt, error) {
 	var result Prompt
-	if err := c.patch(ctx, fmt.Sprintf("/repos/%s", repoHandle), opts, &result); err != nil {
+	if err := c.patch(ctx, fmt.Sprintf("/repos/%s", escapeRepoHandle(repoHandle)), opts, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -73,7 +74,7 @@ func (c *Client) UpdatePrompt(ctx context.Context, repoHandle string, opts Updat
 
 // DeletePrompt deletes a prompt repo.
 func (c *Client) DeletePrompt(ctx context.Context, repoHandle string) error {
-	return c.del(ctx, fmt.Sprintf("/repos/%s", repoHandle), nil)
+	return c.del(ctx, fmt.Sprintf("/repos/%s", escapeRepoHandle(repoHandle)), nil)
 }
 
 // PushPrompt pushes a new commit to a prompt repo. Creates the repo if
@@ -104,7 +105,7 @@ func (c *Client) PushPrompt(ctx context.Context, repoHandle string, manifest jso
 	}
 
 	var result PromptCommit
-	if err := c.post(ctx, fmt.Sprintf("/commits/%s", repoHandle), body, &result); err != nil {
+	if err := c.post(ctx, fmt.Sprintf("/commits/%s", escapeRepoHandle(repoHandle)), body, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -112,9 +113,10 @@ func (c *Client) PushPrompt(ctx context.Context, repoHandle string, manifest jso
 
 // PullPrompt pulls the latest commit from a prompt repo.
 func (c *Client) PullPrompt(ctx context.Context, repoHandle string, opts *PullPromptOptions) (*PromptCommit, error) {
-	path := fmt.Sprintf("/commits/%s/latest", repoHandle)
+	escaped := escapeRepoHandle(repoHandle)
+	path := fmt.Sprintf("/commits/%s/latest", escaped)
 	if opts != nil && opts.CommitHash != nil {
-		path = fmt.Sprintf("/commits/%s/%s", repoHandle, *opts.CommitHash)
+		path = fmt.Sprintf("/commits/%s/%s", escaped, url.PathEscape(*opts.CommitHash))
 	}
 
 	var result PromptCommit
@@ -126,10 +128,21 @@ func (c *Client) PullPrompt(ctx context.Context, repoHandle string, opts *PullPr
 
 // LikePrompt likes a prompt repo.
 func (c *Client) LikePrompt(ctx context.Context, repoHandle string) error {
-	return c.post(ctx, fmt.Sprintf("/likes/%s", repoHandle), nil, nil)
+	return c.post(ctx, fmt.Sprintf("/likes/%s", escapeRepoHandle(repoHandle)), nil, nil)
 }
 
 // UnlikePrompt removes a like from a prompt repo.
 func (c *Client) UnlikePrompt(ctx context.Context, repoHandle string) error {
-	return c.del(ctx, fmt.Sprintf("/likes/%s", repoHandle), nil)
+	return c.del(ctx, fmt.Sprintf("/likes/%s", escapeRepoHandle(repoHandle)), nil)
+}
+
+// escapeRepoHandle escapes each segment of a repo handle ("owner/repo" or "repo")
+// individually so that path traversal is impossible while still allowing the
+// intended slash separator.
+func escapeRepoHandle(handle string) string {
+	parts := strings.SplitN(handle, "/", 2)
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }

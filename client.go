@@ -42,6 +42,10 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		return nil, &LangSmithError{Message: "API key is required. Set LANGCHAIN_API_KEY or use WithAPIKey()"}
 	}
 
+	if !cfg.allowInsecureHTTP && !strings.HasPrefix(cfg.endpoint, "https://") {
+		return nil, &LangSmithError{Message: "endpoint must use HTTPS when transmitting API keys. Use WithAllowInsecureHTTP() to override for local development"}
+	}
+
 	httpClient := cfg.httpClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: cfg.timeout}
@@ -95,6 +99,10 @@ func (c *Client) ServerInfo(ctx context.Context) (*ServerInfo, error) {
 	}
 	return &info, nil
 }
+
+// maxResponseBytes is the maximum response body size the client will read.
+// This prevents OOM from a misbehaving or compromised server.
+const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
 // --- HTTP Helpers ---
 
@@ -172,7 +180,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 			continue
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		resp.Body.Close()
 		if err != nil {
 			lastErr = &LangSmithError{Message: "failed to read response body", Err: err}
@@ -188,18 +196,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 			return nil
 		}
 
-		apiErr := &APIError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-		}
-		// Try to extract message from JSON error response.
-		var errResp struct {
-			Detail string `json:"detail"`
-		}
-		if json.Unmarshal(respBody, &errResp) == nil && errResp.Detail != "" {
-			apiErr.Message = errResp.Detail
-		}
-
+		apiErr := parseAPIError(resp.StatusCode, respBody)
 		if !apiErr.IsRetryable() {
 			return apiErr
 		}
@@ -245,7 +242,7 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, bodyByte
 			continue
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		resp.Body.Close()
 		if err != nil {
 			lastErr = &LangSmithError{Message: "failed to read response body", Err: err}
@@ -261,17 +258,7 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, bodyByte
 			return nil
 		}
 
-		apiErr := &APIError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-		}
-		var errResp struct {
-			Detail string `json:"detail"`
-		}
-		if json.Unmarshal(respBody, &errResp) == nil && errResp.Detail != "" {
-			apiErr.Message = errResp.Detail
-		}
-
+		apiErr := parseAPIError(resp.StatusCode, respBody)
 		if !apiErr.IsRetryable() {
 			return apiErr
 		}
@@ -279,6 +266,30 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, bodyByte
 	}
 
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// maxErrorBodyBytes is the maximum number of bytes stored in APIError.Body
+// to prevent sensitive server responses from propagating through error chains.
+const maxErrorBodyBytes = 512
+
+// parseAPIError builds an APIError from a non-2xx response, truncating the
+// body to avoid leaking large or sensitive payloads into error strings/logs.
+func parseAPIError(statusCode int, respBody []byte) *APIError {
+	body := string(respBody)
+	if len(body) > maxErrorBodyBytes {
+		body = body[:maxErrorBodyBytes] + "...(truncated)"
+	}
+	apiErr := &APIError{
+		StatusCode: statusCode,
+		Body:       body,
+	}
+	var errResp struct {
+		Detail string `json:"detail"`
+	}
+	if json.Unmarshal(respBody, &errResp) == nil && errResp.Detail != "" {
+		apiErr.Message = errResp.Detail
+	}
+	return apiErr
 }
 
 // initBatch lazily starts the background batch worker on first use.

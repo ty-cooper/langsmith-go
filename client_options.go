@@ -12,16 +12,17 @@ import (
 type ClientOption func(*clientConfig)
 
 type clientConfig struct {
-	apiKey        string
-	endpoint      string
-	project       string
-	httpClient    *http.Client
-	timeout       time.Duration
-	maxRetries    int
-	batchSize     int
-	batchInterval time.Duration
-	logger        *slog.Logger
-	onBatchError  internal.OnFlushErrorFunc
+	apiKey            string
+	endpoint          string
+	project           string
+	httpClient        *http.Client
+	timeout           time.Duration
+	maxRetries        int
+	batchSize         int
+	batchInterval     time.Duration
+	logger            *slog.Logger
+	onBatchError      internal.OnFlushErrorFunc
+	allowInsecureHTTP bool
 }
 
 func defaultConfig() *clientConfig {
@@ -85,4 +86,11 @@ func WithLogger(logger *slog.Logger) ClientOption {
 // The callback receives the error and the number of items that were lost.
 func WithOnBatchError(fn func(err error, itemCount int)) ClientOption {
 	return func(c *clientConfig) { c.onBatchError = fn }
+}
+
+// WithAllowInsecureHTTP permits the use of non-HTTPS endpoint URLs.
+// This should only be used for local development; in production the API key
+// would be transmitted in cleartext over the network.
+func WithAllowInsecureHTTP() ClientOption {
+	return func(c *clientConfig) { c.allowInsecureHTTP = true }
 }
