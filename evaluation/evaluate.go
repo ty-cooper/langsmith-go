@@ -80,7 +80,15 @@ func Evaluate(
 		wg.Add(1)
 		go func(idx int, ex langsmith.Example) {
 			defer wg.Done()
-			sem <- struct{}{}
+
+			// Acquire semaphore, but bail if the context is cancelled
+			// to avoid leaking blocked goroutines.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[idx] = resultItem{idx: idx, example: ex, err: ctx.Err()}
+				return
+			}
 			defer func() { <-sem }()
 
 			startTime := time.Now()

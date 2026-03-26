@@ -95,10 +95,18 @@ func NewBatchWorker(cfg BatchWorkerConfig) *BatchWorker {
 
 // Submit adds an item to the batch queue. Non-blocking.
 // Returns false if the worker is closed or the queue is full.
-func (w *BatchWorker) Submit(item BatchItem) bool {
+func (w *BatchWorker) Submit(item BatchItem) (ok bool) {
 	if w.closed.Load() {
 		return false
 	}
+	// After Close() completes its final drain, the queue channel is closed.
+	// A concurrent Submit that passed the closed check above may hit the
+	// closed channel — recover from the panic instead of crashing.
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+		}
+	}()
 	select {
 	case w.queue <- item:
 		return true
@@ -117,12 +125,15 @@ func (w *BatchWorker) Close() {
 
 	// Final drain: catch any items that were submitted between
 	// closed.Store(true) and the run() goroutine finishing its drain.
+	// Close the channel afterward so any late Submit() calls panic-recover
+	// instead of silently enqueuing items that will never be flushed.
 	var remaining []BatchItem
 	for {
 		select {
 		case item := <-w.queue:
 			remaining = append(remaining, item)
 		default:
+			close(w.queue)
 			if len(remaining) > 0 {
 				w.flush(remaining)
 			}
